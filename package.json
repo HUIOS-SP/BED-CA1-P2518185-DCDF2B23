@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js",
-    "db": "drizzle-kit push && node src/db/seed.js"
+    "db": "node src/db/preparePush.js && drizzle-kit push && node src/db/ensureIndexes.js && node src/db/seed.js"
   },
   "keywords": [],
   "author": "huios",
