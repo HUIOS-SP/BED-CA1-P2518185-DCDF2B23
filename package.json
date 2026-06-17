@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js",
+    "test": "node --test \"tests/*.test.js\"",
     "db": "drizzle-kit push && node src/db/seed.js"
   },
   "keywords": [],
   "author": "huios",
-  "license": "ISC",
+  "license": "GPL-3.0-only",
   "type": "module",
   "dependencies": {
     "@libsql/client": "^0.17.3",
