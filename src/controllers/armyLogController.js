@@ -3,13 +3,14 @@ import {
   checkIfNonEmptyString
 } from '../utils/helper.js'
 import * as armyLogModel from '../models/armyLogModel.js'
+import { toArmyLogView } from '../utils/responseFormatter.js'
 
-// Reads generic army_log rows for the user's one army.
+// Reads the army journal and exposes only the public log shape
 export const getArmyLogs = async (req, res, next) => {
   try {
     const army = res.locals.army
 
-    // Query inputs are optional: eventType filters log category, limit caps row count.
+    // Both filters are optional: eventType selects a category and limit caps the result count
     const { eventType } = req.query
     const limit = checkAndGetLimitFromQuery(req, res)
     if (limit === null) return
@@ -26,10 +27,10 @@ export const getArmyLogs = async (req, res, next) => {
 
     const logs = await armyLogModel.findArmyLogsByArmyId(army.id, filters)
 
-    res.locals.data = logs
+    // Format at the API boundary so internal army IDs stay internal
+    res.locals.data = logs.map(toArmyLogView)
     next()
   } catch (error) {
-    console.error('getArmyLogs error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

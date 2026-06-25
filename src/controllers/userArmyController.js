@@ -4,19 +4,19 @@ import {
 } from '../utils/helper.js'
 import { ARMY_NAME_MAX_LENGTH } from '../constants/validation.js'
 import * as userArmyModel from '../models/userArmyModel.js'
+import { toArmyStateView, toArmyView } from '../utils/responseFormatter.js'
 
-// Returns the army row owned by the user.
+// Returns the army row owned by the user
 export const getUserArmy = async (req, res, next) => {
   try {
-    res.locals.data = res.locals.army
+    res.locals.data = toArmyView(res.locals.army)
     next()
   } catch (error) {
-    console.error('getUserArmy error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Updates the user's army name.
+// Updates the user's army name
 export const updateUserArmy = async (req, res, next) => {
   try {
     const userId = res.locals.userId
@@ -37,55 +37,46 @@ export const updateUserArmy = async (req, res, next) => {
 
     const army = await userArmyModel.updateArmyNameByUserId(userId, trimmedArmyName)
 
-    res.locals.data = army
+    res.locals.data = toArmyView(army)
     next()
   } catch (error) {
-    console.error('updateUserArmy error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Restarts the user's game by resetting the one army to the default state.
+// Restarts the user's game by resetting the one army to the default state
 export const restartUserArmy = async (req, res, next) => {
   try {
-    // Middleware guarantees that restart operates on the user's existing army.
+    // Middleware guarantees that restart operates on the user's existing army
     const army = res.locals.army
-    const restartedArmy = await userArmyModel.restartGameForArmy(army)
-    const state = await userArmyModel.findArmyStateByArmy(restartedArmy)
-
-    res.locals.data = state
+    res.locals.data = await userArmyModel.restartGameForArmy(army)
     next()
   } catch (error) {
-    console.error('restartUserArmy error:', error)
-
-    if (
-      error.message === 'Game catalogs must be seeded before restarting an army.'
-    ) {
+    if (error.message === 'Unit types must be seeded before restarting an army.') {
       return res.status(409).json({ error: error.message })
     }
 
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Returns the full army state: resources, equipment, units, and campaign progress. easier back-end debugging
+// Returns the complete gameplay snapshot when a client genuinely needs the whole state
 export const getUserArmyState = async (req, res, next) => {
   try {
-    // The middleware already loaded the army, so this endpoint does not query it twice.
+    // The middleware already loaded the army, so this endpoint does not query it twice
     const army = res.locals.army
-    const state = await userArmyModel.findArmyStateByArmy(army)
+    const { state, missingParts } = await userArmyModel.findArmyStateStatusByArmy(army)
 
-    // Never return 200 with undefined properties, because JSON omits those properties.
-    if (!state.resources || !state.campaignProgress) {
+    // A partial state would look valid in JSON but break gameplay, so fail loudly instead
+    if (missingParts.length > 0) {
       return res.status(409).json({
-        error: 'Army state is incomplete. Restart the game to restore required state.'
+        error: userArmyModel.INCOMPLETE_ARMY_STATE_ERROR
       })
     }
 
-    res.locals.data = state
+    res.locals.data = toArmyStateView(state)
     return next()
   } catch (error) {
-    console.error('getUserArmyState error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

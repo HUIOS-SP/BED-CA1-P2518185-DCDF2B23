@@ -4,18 +4,18 @@ import {
 } from '../utils/helper.js'
 import { TRADE_PRICES } from '../constants/gameBalance.js'
 import * as tradeModel from '../models/tradeModel.js'
+import * as userArmyModel from '../models/userArmyModel.js'
 
-// Buys or sells flour/supply and records the trade.
+// Buys or sells flour/supply and records the trade
 export const tradeResources = async (req, res, next) => {
   try {
-    // Trade is limited to buying or selling flour and supply cuz 2 is enough
-    const userId = res.locals.userId
+    // The camp-follower market trades only the two consumable resources
     const army = res.locals.army
     const body = getRequestBody(req)
     const { tradeType, item, quantity } = body
     const parsedQuantity = checkAndGetPositiveInteger(quantity)
 
-    // Validate the requested trade before changing any army resources.
+    // Validate the requested trade before changing any army resources
     if (!['buy', 'sell'].includes(tradeType)) {
       return res.status(400).json({ error: 'tradeType must be buy or sell.' })
     }
@@ -28,25 +28,21 @@ export const tradeResources = async (req, res, next) => {
       return res.status(400).json({ error: 'Quantity must be a positive integer.' })
     }
 
-    const resources = await tradeModel.findResourcesByArmyId(army.id)
-    const progress = await tradeModel.findCampaignProgressByArmyId(army.id)
-
-    if (!progress) {
-      return res.status(409).json({ error: 'Army has no campaign progress.' })
-    }
-
-    if (progress.gameCompleted) {
-      return res.status(409).json({ error: 'All campaigns have already been completed.' })
-    }
+    // Pull current balances once before calculating the exact trade changes
+    const gameState = await userArmyModel.findArmyGameplayStateByArmyId(army.id)
+    const stateError = userArmyModel.getArmyStateError(gameState)
+    if (stateError) return res.status(409).json({ error: stateError })
+    const { resources, progress } = gameState
 
     const price = TRADE_PRICES[item][tradeType]
     const ducatAmount = price * parsedQuantity
+    // This object contains only the columns affected by the chosen trade
     const resourceChanges = {}
     let ducatsChange = 0
 
     if (tradeType === 'buy') {
-      // Buying spends ducats and increases the chosen resource.
-      //if the player has exactly enough ducats the trade should succeed and leave them with 0 ducats thats why < and not <=
+      // Buying spends ducats and increases the chosen resource
+      // Exact payment is valid and leaves the army with zero ducats
       if (resources.ducats < ducatAmount) {
         return res.status(422).json({ error: 'Insufficient ducats.' })
       }
@@ -55,7 +51,7 @@ export const tradeResources = async (req, res, next) => {
       resourceChanges[item] = resources[item] + parsedQuantity
       ducatsChange = -ducatAmount
     } else {
-      // Selling spends the chosen resource and increases ducats.
+      // Selling spends the chosen resource and increases ducats
       if (resources[item] < parsedQuantity) {
         return res.status(422).json({ error: `Insufficient ${item}.` })
       }
@@ -65,19 +61,17 @@ export const tradeResources = async (req, res, next) => {
       ducatsChange = ducatAmount
     }
 
-    await tradeModel.tradeResources(army, progress.currentTurn, resourceChanges, {
+    // The balance update and matching log entry commit together, as they should
+    const result = await tradeModel.tradeResources(army, progress.currentTurn, resourceChanges, {
       tradeType,
       item,
       quantity: parsedQuantity,
       ducatsChange
     })
 
-    const state = await tradeModel.findArmyStateByUserId(userId)
-
-    res.locals.data = state
+    res.locals.data = result
     next()
   } catch (error) {
-    console.error('tradeResources error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

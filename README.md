@@ -1,391 +1,640 @@
 # Leviathan
 
-Leviathan is a turn-based army campaign management backend. The player creates a profile, raises one persistent army, manages resources, recruits units, trades with camp followers, and fights campaign enemies in order. Waiting produces manpower, equipment, flour, and supply, but recruited units consume flour and supply every turn. The main tension is deciding when to grow, when to trade, and when to risk battle.
+Leviathan is a backend-only, endless turn-based army campaign game built for the ST0503 Backend Web Development CA1 assignment.
+
+Players manage one persistent army, prepare through turns, recruit units, trade resources, and fight generated enemies across campaigns that increase in difficulty forever.
+
+The project focuses on:
+
+- REST API design
+- Express MVC structure
+- relational database modelling
+- server-side validation
+- transactional game actions
+- automated route and calculator testing
+
+Authentication, frontend work, migrations, and background jobs are outside the CA1 scope.
 
 ## Tech Stack
 
 - Node.js
-- Express
+- Express 5
 - Drizzle ORM
-- @libsql/client
-- SQLite/libSQL
-- dotenv
+- libSQL / SQLite
+- JavaScript ES modules
+- Node.js test runner
 - nodemon
-- cors
 
-## MVC Structure
+The main request flow is:
 
-Routes, controllers, and models are split by feature. For example, `userRoutes.js` calls `userController.js`, and `userController.js` calls `userModel.js`. The same pattern is used for army ownership, recruitment, trading, turns, campaign progress, battles, logs, and campaign catalog reads. This keeps each file focused on one purpose and makes debugging easier during the CA1 interview.
-
-Reusable middleware is used for repeated route work:
-
-- `userMiddleware.js` validates `userId`, loads the user, and loads the user's one army.
-- `campaignMiddleware.js` validates `campaignId` and loads the campaign record.
-- `response.js` centralises successful API responses so controllers can place data in `res.locals.data` and call `next()`.
-
-This keeps controllers focused on one action instead of repeating the same parameter checks and success response code in every file.
-
-## Architecture Boundaries
-
-- Routes only map URLs to middleware/controller functions.
-- Controllers validate HTTP inputs, choose status codes, call model/utility functions, and shape API responses.
-- Models contain Drizzle queries and transactions only. They do not use `req`, `res`, or fighting-strength formulas.
-- Utilities handle reusable calculations such as turn upkeep, equipment gain, fighting strength, counter logic, outcomes, and troop losses.
-- Balance values such as thresholds, multipliers, rewards, and starting resources live in `src/constants/gameBalance.js`.
+```text
+route -> middleware -> controller -> model -> Drizzle / SQLite
+                              \-> calculator or response formatter
+```
 
 ## Setup
 
-```bash
-npm install
-```
-
-Create `.env` from `.env.example`:
+Create a `.env` file:
 
 ```env
 DATABASE_URL=file:./leviathan.db
 PORT=3000
 ```
 
-Push the schema and seed catalog data:
+Install dependencies:
+
+```bash
+npm install
+```
+
+Apply the schema and seed catalogue data:
 
 ```bash
 npm run db
 ```
 
-Start the server:
+Start the development server:
 
 ```bash
 npm run dev
 ```
 
-Run the automated tests:
+Run normally:
+
+```bash
+npm start
+```
+
+Run all tests:
 
 ```bash
 npm test
 ```
 
-## Detailed Docs
+The default URL is:
 
-- [API Endpoint Reference](docs/API_ENDPOINTS.md): every route, its purpose, accepted inputs, response shape, and important errors.
-- [Table Reference](docs/TABLES_ABOUT.md): every table, column, key, expected value, relationship, and debugging query.
-- [Mechanics Guide](docs/MECHANICS.md): formulas, battle phases, troop losses, campaign progression, logging, and test strategy.
-- [DBML ERD](dbml/leviathan.dbml): database structure for dbdiagram.io.
+```text
+http://localhost:3000
+```
+
+If an old local database conflicts with the schema, delete `leviathan.db` and run `npm run db` again
+
+## Seed Data and Starter State
+
+`npm run db` seeds read-only catalogue data:
+
+- infantry, cavalry, and artillery unit rules
+- three campaign template rows
+- three example enemy rows per campaign template
+
+Starter resources, equipment, units, progress, and the first log are not standalone seed rows. They are created transactionally whenever `POST /users` creates a user and army.
+
+Starter gameplay state:
+
+```text
+resources: manpower 120, ducats 180, flour 120, supply 100, morale 50
+equipment: muskets 80, horses 25, field guns 8
+units: infantry 0, cavalry 0, artillery 0
+progress: campaign 1, turn 1, enemy 1, completed campaigns 0, waiting turns 0
+```
+
+The campaign template production and reward columns remain seeded as read-only reference metadata. Active endless gameplay does not read those columns, and the catalogue API does not expose them.
 
 ## Core Gameplay Loop
 
-1. Create a user account. The backend automatically creates that user's one army.
-2. Unix Wars starts automatically at campaign one, enemy sequence one.
-3. View the army state using the returned user id.
-4. Recruit units using manpower and equipment.
-5. Trade ducats for flour or supply.
-6. Advance turns to gain manpower/equipment and consume upkeep.
-7. Fight the next enemy in the linear campaign sequence before waiting too long.
-8. Winning a battle deducts some troops from the recruited unit counts.
-9. Win three battles to move to the next campaign.
-10. If defeated, the army resets back to Unix Wars.
-11. Use restart to manually reset the same user's army back to the default state.
-12. Check the single persisted army log.
+```text
+Create user
+-> receive starter army
+-> campaign 1 begins with a random faction
+-> prepare through turns, trade, and recruitment
+-> fight enemy 1
+-> fight enemy 2
+-> fight enemy 3
+-> campaign number increases
+-> a new faction is selected
+-> difficulty increases
+-> repeat forever
+```
 
-## API Route Summary
+Each campaign has three generated enemies. There is no final campaign and no `gameCompleted` state.
+
+## Endless Progression
+
+The active enemy is generated from:
+
+```text
+campaignNumber + currentEnemySequence + currentFaction
+```
+
+Stored progress contains:
+
+```text
+campaignNumber
+currentTurn
+currentEnemySequence
+currentFaction
+campaignsCompleted
+turnsOnCurrentEnemy
+```
+
+The faction is selected when a campaign begins and remains stable during that campaign.
+
+After enemy 3 is defeated:
+
+```text
+campaignNumber += 1
+campaignsCompleted = campaignNumber - 1
+currentEnemySequence = 1
+currentFaction = new random faction
+turnsOnCurrentEnemy = 0
+```
+
+Defeat resets resources, equipment, and units to starter values. It preserves campaign depth, faction, completed count, and current turn, then returns to enemy 1.
+
+## Difficulty Scaling
+
+One multiplier scales endless gameplay:
+
+```text
+multiplier = 1 + (campaignNumber - 1) * 0.15
+```
+
+| Campaign | Multiplier |
+| ---: | ---: |
+| 1 | 1.00x |
+| 2 | 1.15x |
+| 5 | 1.60x |
+| 10 | 2.35x |
+
+It scales:
+
+- generated enemy strength
+- turn resource production
+- turn equipment production
+- victory rewards
+
+## Generated Enemies
+
+| Sequence | Title | Base strength | Weak against |
+| ---: | --- | ---: | --- |
+| 1 | Vanguard | 120 | infantry |
+| 2 | Iron Host | 180 | cavalry |
+| 3 | Grand Battery | 260 | artillery |
+
+Available factions:
+
+| Key | Name |
+| --- | --- |
+| `liho` | Duchy of Liho |
+| `koi` | Koi Konfederacy |
+| `bingxue` | Bingxue Commonwealth |
+
+Generated enemies are deterministic for the same campaign number, sequence, and faction. They are not stored as database rows.
+
+## Turn Rules
+
+Each turn:
+
+1. calculates scaled production
+2. adds flour and supply production
+3. consumes unit upkeep
+4. applies a morale penalty if flour is insufficient
+5. adds manpower and equipment production
+6. increments the turn and enemy waiting counter
+7. triggers an enemy auto-attack when the counter reaches 6
+
+Morale stays between `0` and `100`.
+
+## Battle Rules
+
+```text
+base strength = sum(unit quantity * unit base strength)
+morale multiplier = 0.5 + morale / 100
+counter multiplier = 1.10 when a matching counter unit exists
+resource multiplier = 0.85 when flour or supply is insufficient
+```
+
+An exact strength tie is a victory.
+
+| Victory type | Ratio | Casualty rate |
+| --- | --- | ---: |
+| Pyrrhic | up to 1.10 | 20% |
+| Standard | above 1.10 and below 1.50 | 10% |
+| Decisive | 1.50 or above | 5% |
+
+## API Overview
 
 ### Users
 
-- `GET /users?username=`
-- `GET /users/:userId`
-- `POST /users`
-- `PUT /users/:userId`
-- `DELETE /users/:userId`
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/users?username=` | List or filter users |
+| POST | `/users` | Create a user and starter army |
+| GET | `/users/:userId` | Read one user |
+| PUT | `/users/:userId` | Rename a user |
+| DELETE | `/users/:userId` | Delete the user and owned state |
 
-### Armies
+### Army and Gameplay
 
-- `GET /users/:userId/army`
-- `PUT /users/:userId/army`
-- `POST /users/:userId/army/restart`
-- `GET /users/:userId/army/state`
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/users/:userId/army` | Read army identity |
+| PUT | `/users/:userId/army` | Rename the army |
+| GET | `/users/:userId/army/state` | Read the complete gameplay state |
+| POST | `/users/:userId/army/restart` | Restart from campaign 1 |
+| POST | `/users/:userId/army/recruit` | Recruit units |
+| POST | `/users/:userId/army/trade` | Buy or sell flour and supply |
+| POST | `/users/:userId/army/advance-turn` | Apply a turn and possible auto-attack |
+| POST | `/users/:userId/army/battle` | Fight the current generated enemy |
+| GET | `/users/:userId/army/logs?eventType=&limit=` | Read the event journal |
 
-### Gameplay
+### Read-Only Catalogue
 
-- `POST /users/:userId/army/recruit`
-- `POST /users/:userId/army/trade`
-- `POST /users/:userId/army/advance-turn`
-- `GET /users/:userId/army/campaign-progress`
-- `POST /users/:userId/army/battle`
-- `GET /users/:userId/army/logs?eventType=&limit=`
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/campaigns` | Read campaign template identity and description |
+| GET | `/campaigns/:campaignId/enemies` | Read ordered example enemies |
 
-### Catalogs
+Catalogue routes are informational. Active battles use generated enemies, not catalogue enemy rows.
 
-- `GET /campaigns`
-- `GET /campaigns/:campaignId/enemies`
+## Response Format
 
-## Main Request Bodies
-
-Create user:
-
-```json
-{ "username": "alice", "password": "password123", "armyName": "First Legion" }
-```
-
-`armyName` is optional during user creation. If it is omitted, the backend uses the username to create a default army name. Army names are limited to 50 characters; the username portion of a generated default is truncated when necessary.
-
-Usernames are trimmed and limited to 50 characters on both creation and update. SQLite stores the value as `text`; the application enforces the limit and the DBML documents it as `varchar(50)`.
-
-Recruit:
+Successful application responses use:
 
 ```json
-{ "unitName": "infantry", "quantity": 2 }
+{
+  "message": "Action completed successfully.",
+  "data": {}
+}
 ```
 
-Trade:
+Errors use:
 
 ```json
-{ "tradeType": "buy", "item": "flour", "quantity": 10 }
+{
+  "error": "Explanation of the error."
+}
 ```
 
-Battle has no request body. The backend fights the current campaign enemy.
+`DELETE /users/:userId` returns `204 No Content`
 
-## Turn Resource Production
+Gameplay mutations return focused action results. They do not repeat the full army state. Use `GET /users/:userId/army/state` when a complete snapshot is required.
 
-Every advanced turn reads production from the army's current campaign row. Production is applied before unit upkeep:
+## Example Responses
 
-| Campaign | Manpower | Muskets | Horses | Field guns | Flour | Supply |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Unix Wars | 25 | 8 | 3 | 2 | 13 | 14 |
-| Conquest of Wayland | 25 | 7 | 3 | 1 | 10 | 12 |
-| War of the Daemons | 30 | 9 | 4 | 2 | 10 | 8 |
+The examples below assume the randomly selected faction is `liho`
 
-`CAMPAIGNS` in `gameBalance.js` defines the seed values, `seed.js` writes them to `campaigns`, and runtime calculations read the database row. There are no duplicate global or army-level production rates.
+### Create User
 
-## Enemy Auto-Attack Rule
+`POST /users`
 
-`POST /users/:userId/army/advance-turn` may now trigger a battle. If the player advances `6` turns while staying on the same enemy sequence, the current enemy attacks immediately after the sixth turn effects are applied.
+```json
+{
+  "username": "player",
+  "armyName": "First Army"
+}
+```
 
-The order is:
+```json
+{
+  "message": "User created successfully. Starting army and endless campaign created.",
+  "data": {
+    "id": 1,
+    "username": "player",
+    "createdAt": "2026-06-25T10:00:00.000Z",
+    "updatedAt": "2026-06-25T10:00:00.000Z",
+    "army": {
+      "id": 1,
+      "armyName": "First Army",
+      "updatedAt": "2026-06-25T10:00:00.000Z"
+    }
+  }
+}
+```
 
-1. Turn gains and upkeep are applied.
-2. `turns_on_current_enemy` increases.
-3. If the counter reaches `ENEMY_ATTACK_AT_TURN`, battle resolves using the updated resources.
-4. The counter resets to `0` after the battle result is written.
+### Complete Army State
 
-This is turn-based and request-triggered. There is no real-time timer, background job, WebSocket, enemy queue table, or client-selected auto-attack target.
+`GET /users/1/army/state`
 
-Normal turn response:
+```json
+{
+  "message": "Army state retrieved successfully.",
+  "data": {
+    "army": {
+      "id": 1,
+      "armyName": "First Army",
+      "updatedAt": "2026-06-25T10:00:00.000Z"
+    },
+    "resources": {
+      "manpower": 120,
+      "ducats": 180,
+      "flour": 120,
+      "supply": 100,
+      "morale": 50
+    },
+    "equipment": {
+      "horses": 25,
+      "fieldGuns": 8,
+      "muskets": 80
+    },
+    "units": [
+      {
+        "unitName": "infantry",
+        "quantity": 0,
+        "baseStrength": 10,
+        "requiredManpower": 10,
+        "requiredEquipment": "muskets",
+        "requiredEquipmentQty": 10,
+        "flourUpkeep": 3,
+        "supplyUpkeep": 1,
+        "battleSupplyCost": 1
+      },
+      {
+        "unitName": "cavalry",
+        "quantity": 0,
+        "baseStrength": 18,
+        "requiredManpower": 15,
+        "requiredEquipment": "horses",
+        "requiredEquipmentQty": 5,
+        "flourUpkeep": 3,
+        "supplyUpkeep": 1,
+        "battleSupplyCost": 1
+      },
+      {
+        "unitName": "artillery",
+        "quantity": 0,
+        "baseStrength": 28,
+        "requiredManpower": 20,
+        "requiredEquipment": "field_guns",
+        "requiredEquipmentQty": 2,
+        "flourUpkeep": 1,
+        "supplyUpkeep": 2,
+        "battleSupplyCost": 3
+      }
+    ],
+    "campaignProgress": {
+      "campaignNumber": 1,
+      "currentTurn": 1,
+      "currentEnemySequence": 1,
+      "currentFaction": "liho",
+      "campaignsCompleted": 0,
+      "turnsOnCurrentEnemy": 0,
+      "currentEnemy": {
+        "enemyName": "Duchy of Liho Vanguard",
+        "factionName": "Duchy of Liho",
+        "enemySequence": 1,
+        "weakAgainstUnit": "infantry",
+        "difficultyMultiplier": 1,
+        "fightingStrength": 120
+      }
+    }
+  }
+}
+```
+
+### Recruit Two Infantry
+
+`POST /users/1/army/recruit`
+
+```json
+{
+  "unitName": "infantry",
+  "quantity": 2
+}
+```
+
+```json
+{
+  "message": "Units recruited successfully.",
+  "data": {
+    "recruited": {
+      "unitName": "infantry",
+      "quantity": 2,
+      "totalQuantity": 2
+    },
+    "spent": {
+      "manpower": 20,
+      "equipment": {
+        "type": "muskets",
+        "quantity": 20
+      }
+    },
+    "remaining": {
+      "manpower": 100,
+      "equipment": {
+        "type": "muskets",
+        "quantity": 60
+      }
+    }
+  }
+}
+```
+
+### Advance an Empty Army by One Turn
+
+`POST /users/1/army/advance-turn`
 
 ```json
 {
   "message": "Turn advanced successfully.",
   "data": {
-    "turnAdvanced": true,
-    "enemyAttacked": false,
-    "enemyAttackAtTurn": 6,
-    "turnsOnCurrentEnemy": 3,
-    "armyState": {}
+    "turnNumber": 2,
+    "campaignMultiplier": 1,
+    "gained": {
+      "manpower": 25,
+      "flour": 13,
+      "supply": 14,
+      "equipment": {
+        "horses": 3,
+        "fieldGuns": 2,
+        "muskets": 8
+      }
+    },
+    "consumed": {
+      "flour": 0,
+      "supply": 0
+    },
+    "moraleChange": 0,
+    "resourceBalances": {
+      "manpower": 145,
+      "ducats": 180,
+      "flour": 133,
+      "supply": 114,
+      "morale": 50
+    },
+    "equipmentBalances": {
+      "horses": 28,
+      "fieldGuns": 10,
+      "muskets": 88
+    },
+    "enemyAttack": {
+      "attacked": false,
+      "attackAtTurn": 6,
+      "turnsOnCurrentEnemy": 1
+    },
+    "campaignProgress": {
+      "campaignNumber": 1,
+      "currentTurn": 2,
+      "currentEnemySequence": 1,
+      "currentFaction": "liho",
+      "campaignsCompleted": 0,
+      "turnsOnCurrentEnemy": 1
+    }
   }
 }
 ```
 
-Auto-attack response:
+### Manual Battle with an Empty Starter Army
+
+`POST /users/1/army/battle`
 
 ```json
 {
-  "message": "Turn advanced. The enemy attacked first.",
+  "message": "Battle resolved successfully.",
   "data": {
-    "turnAdvanced": true,
-    "enemyAttacked": true,
-    "enemyAttackAtTurn": 6,
-    "turnsOnCurrentEnemy": 0,
-    "battle": {
-      "trigger": "enemy_auto_attack",
-      "outcome": "victory",
-      "enemyName": "Liho Border Guard",
-      "playerFightingStrength": 123,
-      "enemyFightingStrength": 75,
-      "victoryType": "decisive",
-      "troopLosses": []
+    "trigger": "manual",
+    "outcome": "defeat",
+    "campaignNumber": 1,
+    "enemy": {
+      "name": "Duchy of Liho Vanguard",
+      "factionName": "Duchy of Liho",
+      "fightingStrength": 120,
+      "difficultyMultiplier": 1
     },
-    "armyState": {}
+    "player": {
+      "fightingStrength": 0,
+      "hasCounterUnit": false,
+      "counterMultiplier": 1,
+      "resourceMultiplier": 1
+    },
+    "victoryType": null,
+    "troopLosses": [],
+    "armyReset": true,
+    "campaignCompleted": false,
+    "resourceBalances": {
+      "manpower": 120,
+      "ducats": 180,
+      "flour": 120,
+      "supply": 100,
+      "morale": 50
+    },
+    "campaignProgress": {
+      "campaignNumber": 1,
+      "currentTurn": 1,
+      "currentEnemySequence": 1,
+      "currentFaction": "liho",
+      "campaignsCompleted": 0,
+      "turnsOnCurrentEnemy": 0
+    }
   }
 }
 ```
 
-## Enemy Selection Rule
+## Status Codes
 
-Manual battle and enemy auto-attack always resolve against the current progress row:
+| Status | Meaning |
+| ---: | --- |
+| 200 | Successful read, update, or gameplay action |
+| 201 | User and starter army created |
+| 204 | User deleted |
+| 400 | Invalid input or forbidden client-selected enemy |
+| 404 | User, army, unit type, or catalogue campaign not found |
+| 409 | Required gameplay state is missing or inconsistent |
+| 422 | Valid action cannot be afforded |
+| 500 | Unexpected server or database error |
 
-```txt
-campaign_id = army_campaign_progress.campaign_id
-sequence = army_campaign_progress.current_enemy_sequence
+## Testing
+
+The suite currently contains 130 passing tests covering:
+
+- user CRUD and validation
+- transactional starter creation
+- army state and focused mutation responses
+- recruitment and trading
+- turn production and upkeep
+- enemy auto-attacks
+- battle outcomes and casualties
+- endless progression
+- restart and missing-state recovery
+- logs and catalogue routes
+- uniqueness, cascade, and foreign-key behavior
+- calculator and helper edge cases
+
+## Project Structure
+
+```text
+.
+|-- README.md
+|-- index.js
+|-- drizzle.config.js
+|-- package.json
+|-- dbml
+|   `-- leviathan.dbml
+|-- docs
+|   |-- API_ENDPOINTS.md
+|   |-- MECHANICS.md
+|   `-- TABLES_ABOUT.md
+|-- tests
+|   |-- api.test.js
+|   `-- calculators.test.js
+`-- src
+    |-- constants
+    |   |-- gameBalance.js
+    |   `-- validation.js
+    |-- controllers
+    |   |-- armyLogController.js
+    |   |-- battleController.js
+    |   |-- campaignController.js
+    |   |-- recruitController.js
+    |   |-- tradeController.js
+    |   |-- turnController.js
+    |   |-- userArmyController.js
+    |   `-- userController.js
+    |-- db
+    |   |-- db.js
+    |   |-- schema.js
+    |   `-- seed.js
+    |-- middleware
+    |   |-- campaignMiddleware.js
+    |   |-- response.js
+    |   `-- userMiddleware.js
+    |-- models
+    |   |-- armyLogModel.js
+    |   |-- battleModel.js
+    |   |-- campaignModel.js
+    |   |-- recruitModel.js
+    |   |-- tradeModel.js
+    |   |-- turnModel.js
+    |   |-- userArmyModel.js
+    |   `-- userModel.js
+    |-- routes
+    |   |-- armyRoutes.js
+    |   |-- campaignRoutes.js
+    |   `-- userRoutes.js
+    `-- utils
+        |-- battleCalculator.js
+        |-- campaignScaling.js
+        |-- enemyGenerator.js
+        |-- equipment.js
+        |-- helper.js
+        |-- responseFormatter.js
+        `-- turnCalculator.js
 ```
 
-`POST /users/:userId/army/battle` has no request body. The backend rejects `enemyArmyId` because the client must not choose or skip enemies.
+## Further Documentation
 
-## State Gating
+- [API endpoint reference](docs/API_ENDPOINTS.md)
+- [Gameplay mechanics](docs/MECHANICS.md)
+- [Database table reference](docs/TABLES_ABOUT.md)
+- [DBML relationship diagram](dbml/leviathan.dbml)
 
-`advance-turn` returns `409 Conflict` when the game is completed, campaign progress is missing, the campaign is missing, or the current enemy sequence points to no valid enemy.
+## CA1 Design Boundaries
 
-Manual battle returns `409 Conflict` for the same non-playable progress problems. If all campaigns are already completed, battle also returns `409 Conflict`.
-
-The project does not store an army status string. `army_campaign_progress.game_completed` records the only terminal state. Defeat immediately resets the army back to Campaign 1, Enemy 1 and clears the completion flag.
-
-## Counter Safety
-
-`turns_on_current_enemy` belongs to the current enemy sequence only, not the whole campaign. It is treated as `0` if old/manual database data somehow contains `null`, a negative number, or a non-integer.
-
-The counter resets to exactly `0` when:
-
-- a new army is created
-- the game is restarted
-- manual battle resolves
-- enemy auto-attack resolves
-- victory advances to the next enemy
-- victory advances to the next campaign
-- final completion happens
-- defeat reset happens
-
-## Constants Rule
-
-The auto-attack threshold lives in `ENEMY_ATTACK_AT_TURN` inside `gameBalance.js`. Controllers, models, responses, docs, and tests should use that constant instead of hardcoding the threshold in multiple files.
-
-## Unit and Equipment Naming
-
-`army_units` and `army_equipment` store numeric foreign keys because those tables represent quantities belonging to catalog rows. Player-facing requests use readable names: recruitment accepts `unitName`, and army-state responses join the catalog tables to include `unitName` and `equipmentName`. Keeping IDs for database relationships and names for API input/output preserves normalization without making the CA1 routes difficult to read.
-
-## Database Table Summary
-
-- `users`: player profile and CA2-ready password column.
-- `armies`: the required army identity row created for each user.
-- `army_resources`: manpower, ducats, flour, supply, and morale.
-- `equipment_types`: seeded equipment catalog.
-- `army_equipment`: equipment quantities owned by an army.
-- `unit_types`: seeded recruitable unit catalog.
-- `army_units`: recruited unit quantities owned by an army.
-- `campaigns`: three seeded campaign records with major rewards.
-- `campaign_enemy_armies`: three ordered enemies per campaign, including strength, weakness, and rewards.
-- `army_campaign_progress`: one central game-state row containing current turn, campaign, enemy sequence, enemy waiting turns, and completion.
-- `army_log`: one readable event journal for turns, trades, recruitment, battles, campaign completion, and resets.
-
-## ERD Design Notes
-
-### ID Strategy
-
-The current CA1 implementation uses integer auto-increment primary keys:
-
-```txt
-id integer primary key auto-increment
-```
-
-Foreign keys such as `user_id`, `army_id`, and `campaign_id` therefore also use integers. This follows the module-style `primaryKey({ autoIncrement: true })` approach and avoids adding UUID, nanoid, or custom ID generation logic.
-
-String columns use `text` in the actual Drizzle SQLite schema. The DBML uses `varchar` to match the module's ERD naming style.
-
-### One User, One Army
-
-Every user receives an army inside the same transaction that creates the user. Independent army creation and deletion routes are intentionally unavailable. The `armies.user_id` unique constraint prevents a user from owning a second army:
-
-```txt
-user_id integer not null unique
-```
-
-The database constraint enforces at most one army per user; transactional user creation and the absence of an army-delete route enforce exactly one during normal application use. Deleting the user is the only supported way to delete their army, and foreign-key cascades remove all army-owned state.
-
-The army does not store `created_at`. Because it is created transactionally with its user and cannot be independently recreated, `users.created_at` records when both the profile and starting game began. `armies.updated_at` remains for renames and in-place restarts.
-
-### Army Resources
-
-`army_resources.army_id` is unique, so each army has exactly one resource row. This keeps resource reads simple because the backend does not need to choose between multiple resource records.
-
-### Campaign Progress
-
-`army_campaign_progress` stores the army's current campaign only, not a full history of every campaign attempt. When Campaign 1 is completed, the same row is updated to Campaign 2 and `current_enemy_sequence` resets to 1.
-
-Completed campaign events are recorded in `army_log`, so the project keeps history without needing a separate campaign history table.
-
-The same row stores two different turn values. `current_turn` is the total turn number for the current run and continues across campaigns. `turns_on_current_enemy` counts waiting against only the current enemy sequence. The waiting counter resets whenever the enemy changes or battle resolves; both values reset when the game restarts or defeat resets the run.
-
-`game_completed` is a boolean on this row. It replaces the old `armies.status` string because completion is the only terminal state that must be persisted.
-
-### Enemy Weakness
-
-`campaign_enemy_armies.weak_against_unit` is intentionally stored as `text` in the actual database instead of a foreign key. In DBML, it is shown as `varchar` for module-style ERD readability. Allowed values are:
-
-```txt
-none
-infantry
-cavalry
-artillery
-```
-
-This keeps the battle logic simple and readable for CA1. The backend validates and uses this value to apply the counter multiplier from `gameBalance.js`.
-
-The allowed weakness values are standardised in `VALID_WEAKNESSES` inside `gameBalance.js`, so campaign seed data and battle calculations use the same list.
-
-### Victory Troop Losses
-
-Troop loss only happens when the player wins a battle. Defeat does not run partial troop deduction because defeat already resets the army back to Campaign 1, Enemy 1.
-
-After a win, the backend classifies the result as:
-
-- `pyrrhic`: player strength barely beats enemy strength.
-- `standard`: player strength clearly beats enemy strength.
-- `decisive`: player strength greatly beats enemy strength.
-
-The troop loss rates and victory ratio thresholds are stored in `gameBalance.js`. The calculator uses the victory margin only, so `weak_against_unit` remains the single enemy-specific combat modifier.
-
-The battle response and battle log include `victoryType` and `troopLosses` so the calculation remains readable during testing.
-
-For the full formula and examples, see [Mechanics Guide](docs/MECHANICS.md).
-
-### Army Log
-
-`army_log` is a general event journal. Instead of separate `turn_log`, `trade_log`, and `battle_log` tables, each important event is stored with:
-
-- `turn_number`: when the event occurred; several events may share one turn.
-- `event_type`: such as `turn`, `trade`, `recruit`, `battle`, or `campaign`.
-- `message`: a short readable sentence.
-- `details`: readable JSON text with the important numbers behind the event.
-
-`event_type` answers "what kind of event is this?" and supports filtering. `details` answers "what values were involved?" and varies by event. This keeps the schema smaller while still giving enough history for debugging and Postman testing.
-
-### Unique Constraints
-
-These composite unique indexes prevent duplicate rows:
-
-- `(army_id, equipment_type_id)` prevents duplicate equipment rows for the same army.
-- `(army_id, unit_type_id)` prevents duplicate unit rows for the same army.
-- `(campaign_id, sequence)` prevents duplicate enemy sequence numbers inside one campaign.
-
-## Assumptions and Scope Limits
-
-- Each user owns exactly one army during normal application use.
-- Creating a user automatically creates their one army and starts Unix Wars.
-- Armies cannot be created or deleted independently; deleting the user cascades through all army data.
-- Each army has exactly one campaign progress row.
-- Normal gameplay routes use `userId`; the client does not need to know `army_id`.
-- Every table uses `id` as an integer auto-increment primary key.
-- Foreign keys use names such as `user_id`, `army_id`, and `campaign_id`.
-- Passwords are stored as plain text only because CA1 does not implement real authentication.
-- There is no login yet. During CA1 testing, the returned user id acts as the player selector for gameplay routes.
-- There is no frontend, JWT, session login, bcrypt, multiplayer, weather, diplomacy, or random events yet.
-
-## CA2 Readiness
-
-- The `users.password` column already exists.
-- Authentication is intentionally not implemented yet.
-- The user-based route structure can support frontend pages later.
-
-## Example Postman Test Flow
-
-1. `POST /users`
-2. `GET /users/:userId/army/state`
-3. `POST /users/:userId/army/recruit`
-4. `POST /users/:userId/army/trade`
-5. `POST /users/:userId/army/advance-turn`
-6. `GET /campaigns`
-7. `GET /users/:userId/army/campaign-progress`
-8. `POST /users/:userId/army/battle`
-9. `POST /users/:userId/army/restart`
-10. `GET /users/:userId/army/logs`
-11. `GET /users/:userId/army/state`
-
-## ERD
-
-Use `dbml/leviathan.dbml` in dbdiagram.io to generate the CA1 ERD.
+- one user owns exactly one army
+- authentication and frontend work are excluded
+- generated enemies support endless depth without infinite database rows
+- campaign templates are read-only catalogue data
+- equipment uses one fixed-shape row per army
+- gameplay mutations return focused action results
+- `/army/state` is the single complete gameplay-state read
+- enemy auto-attacks are turn-triggered rather than timer-based

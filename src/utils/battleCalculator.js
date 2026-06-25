@@ -1,4 +1,4 @@
-import { getValueOrDefault } from './helper.js'
+import { getNumberWithinRange, getValueOrDefault } from './helper.js'
 import {
   BATTLE_COUNTER_MULTIPLIER,
   BATTLE_DECISIVE_VICTORY_MIN_RATIO,
@@ -9,13 +9,15 @@ import {
   BATTLE_PYRRHIC_VICTORY_MAX_RATIO,
   BATTLE_PYRRHIC_VICTORY_TROOP_LOSS_RATE,
   BATTLE_STANDARD_VICTORY_TROOP_LOSS_RATE,
+  MORALE_MAX,
+  MORALE_MIN,
   VALID_WEAKNESSES,
   VICTORY_TYPE_DECISIVE,
   VICTORY_TYPE_PYRRHIC,
   VICTORY_TYPE_STANDARD
 } from '../constants/gameBalance.js'
 
-// Adds up the flour and supply needed by all units for one battle.
+// Adds up the flour and supply needed by all units for one battle
 export function calculateBattleResourceCost(units) {
   return units.reduce((total, unit) => {
     const quantity = getValueOrDefault(unit.quantity, 0)
@@ -27,7 +29,7 @@ export function calculateBattleResourceCost(units) {
   }, { flour: 0, supply: 0 })
 }
 
-// Checks whether the army has at least one unit that counters the enemy weakness.
+// Checks whether the army brought at least one unit that counters the enemy weakness
 export function checkIfArmyHasCounterUnit(units, weakAgainstUnit) {
   if (!VALID_WEAKNESSES.includes(weakAgainstUnit)) {
     return false
@@ -46,12 +48,16 @@ export function checkIfArmyHasCounterUnit(units, weakAgainstUnit) {
   return counterUnit.quantity > 0
 }
 
-// Converts morale into a simple multiplier where 50 morale means normal strength.
+// Converts morale into a simple multiplier where 50 morale means normal strength
 export function calculateMoraleMultiplier(morale) {
-  return 0.5 + morale / 100
+  const number = Number(morale)
+  const safeMorale = Number.isFinite(number)
+    ? getNumberWithinRange(number, MORALE_MIN, MORALE_MAX)
+    : MORALE_MIN
+  return 0.5 + safeMorale / 100
 }
 
-// Calculates total player fighting strength for the current enemy.
+// Calculates total player fighting strength for the current enemy
 export function calculatePlayerFightingStrength({
   units,
   morale,
@@ -59,7 +65,7 @@ export function calculatePlayerFightingStrength({
   hasEnoughSupply,
   weakAgainstUnit
 }) {
-  // Base strength is the only part that depends on unit quantity and unit stats.
+  // Base strength is the only part that depends on unit quantity and unit stats
   const baseStrength = units.reduce((total, unit) => {
     const quantity = getValueOrDefault(unit.quantity, 0)
     return total + quantity * unit.baseStrength
@@ -79,7 +85,7 @@ export function calculatePlayerFightingStrength({
   }
 
   const moraleMultiplier = calculateMoraleMultiplier(morale)
-  // Floor keeps the API response as a whole number and avoids decimal fighting strength.
+  // Floor keeps fighting strength whole because nobody needs a decimal number of soldiers
   const fightingStrength = Math.floor(
     baseStrength * moraleMultiplier * counterMultiplier * resourceMultiplier
   )
@@ -94,7 +100,7 @@ export function calculatePlayerFightingStrength({
   }
 }
 
-// Compares final fighting strength to decide whether the player wins.
+// Compares final fighting strength to decide whether the player wins
 export function determineBattleOutcome(playerFightingStrength, enemyFightingStrength) {
   if (playerFightingStrength >= enemyFightingStrength) {
     return 'victory'
@@ -103,13 +109,13 @@ export function determineBattleOutcome(playerFightingStrength, enemyFightingStre
   return 'defeat'
 }
 
-// Classifies how strong the victory was compared with the enemy strength.
+// Classifies how strong the victory was compared with the enemy strength
 export function determineVictoryType(playerFightingStrength, enemyFightingStrength) {
   if (enemyFightingStrength <= 0) {
     return VICTORY_TYPE_DECISIVE
   }
 
-  // Victory ratio is only used after a win, so it does not compete with weakness logic.
+  // Victory ratio is only used after a win, so it does not compete with weakness logic
   const victoryRatio = playerFightingStrength / enemyFightingStrength
 
   if (victoryRatio <= BATTLE_PYRRHIC_VICTORY_MAX_RATIO) {
@@ -123,7 +129,7 @@ export function determineVictoryType(playerFightingStrength, enemyFightingStreng
   return VICTORY_TYPE_STANDARD
 }
 
-// Gets the starting loss rate for the victory type.
+// Gets the starting loss rate for the victory type
 function getTroopLossRateForVictoryType(victoryType) {
   if (victoryType === VICTORY_TYPE_PYRRHIC) {
     return BATTLE_PYRRHIC_VICTORY_TROOP_LOSS_RATE
@@ -136,7 +142,7 @@ function getTroopLossRateForVictoryType(victoryType) {
   return BATTLE_STANDARD_VICTORY_TROOP_LOSS_RATE
 }
 
-// Calculates troop losses after a victory using the victory margin classification.
+// Calculates troop losses after a victory using the victory margin classification
 export function calculateVictoryTroopLosses({ units, victoryType }) {
   const troopLossRate = getTroopLossRateForVictoryType(victoryType)
 
@@ -144,7 +150,7 @@ export function calculateVictoryTroopLosses({ units, victoryType }) {
     const quantityBefore = getValueOrDefault(unit.quantity, 0)
     let quantityLost = 0
 
-    // ceil makes small armies still lose at least one soldier when casualties apply.
+    // ceil means even small armies lose at least one unit when casualties apply, harsh but clear
     if (quantityBefore > 0) {
       quantityLost = Math.ceil(quantityBefore * troopLossRate)
     }
@@ -161,7 +167,7 @@ export function calculateVictoryTroopLosses({ units, victoryType }) {
   })
 }
 
-// Builds every calculated value needed before the battle model writes database changes.
+// Builds the complete battle decision before any database write happens
 export function calculateBattleResolution({
   campaign,
   enemy,
@@ -174,12 +180,20 @@ export function calculateBattleResolution({
   const battleCost = calculateBattleResourceCost(units)
   const hasEnoughFlour = resources.flour >= battleCost.flour
   const hasEnoughSupply = resources.supply >= battleCost.supply
+  const weakAgainstUnit = getValueOrDefault(
+    enemy.weakAgainstUnitType,
+    enemy.weakAgainstUnit
+  )
+  const campaignName = getValueOrDefault(
+    campaign.campaignName,
+    `Campaign ${campaign.campaignNumber}`
+  )
   const playerStrength = calculatePlayerFightingStrength({
     units,
     morale: resources.morale,
     hasEnoughFlour,
     hasEnoughSupply,
-    weakAgainstUnit: enemy.weakAgainstUnit
+    weakAgainstUnit
   })
   const outcome = determineBattleOutcome(
     playerStrength.fightingStrength,
@@ -199,12 +213,15 @@ export function calculateBattleResolution({
     })
   }
 
+  // Logs and debugging share these details, so the calculation has one source of truth
   const battleDetails = {
     trigger,
-    campaignName: campaign.campaignName,
+    campaignName,
     enemyName: enemy.enemyName,
     enemyFightingStrength: enemy.fightingStrength,
-    weakAgainstUnit: enemy.weakAgainstUnit,
+    weakAgainstUnit,
+    difficultyMultiplier: enemy.difficultyMultiplier,
+    factionName: enemy.factionName,
     playerFightingStrength: playerStrength.fightingStrength,
     playerBaseStrength: playerStrength.baseStrength,
     moraleMultiplier: playerStrength.moraleMultiplier,

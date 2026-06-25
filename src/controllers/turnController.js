@@ -1,140 +1,97 @@
 import * as turnModel from '../models/turnModel.js'
+import * as battleModel from '../models/battleModel.js'
+import * as userArmyModel from '../models/userArmyModel.js'
+import { BATTLE_TRIGGER_ENEMY_AUTO_ATTACK, ENEMY_ATTACK_AT_TURN } from '../constants/gameBalance.js'
+import { calculateBattleResolution } from '../utils/battleCalculator.js'
 import {
-  BATTLE_TRIGGER_ENEMY_AUTO_ATTACK,
-  ENEMY_ATTACK_AT_TURN
-} from '../constants/gameBalance.js'
-import {
-  calculateBattleResolution
-} from '../utils/battleCalculator.js'
-import {
-  calculateNextTurnsOnCurrentEnemy,
-  calculateEquipmentGain,
-  calculateTurnResult,
-  calculateUnitUpkeep,
-  checkIfCampaignProductionIsValid,
-  checkIfEnemyShouldAutoAttack
+  calculateNextTurnsOnCurrentEnemy, calculateEquipmentGain, calculateTurnResult,
+  calculateUnitUpkeep, checkIfEnemyShouldAutoAttack
 } from '../utils/turnCalculator.js'
+import {
+  buildBattleResponse,
+  toCampaignProgressSummary
+} from '../utils/responseFormatter.js'
 
-// Advances the user's army by one turn and applies upkeep/income.
+// Advances production/upkeep and optionally resolves the enemy's automatic attack
 export const advanceTurn = async (req, res, next) => {
   try {
-    // Turn advancement changes several tables, so the model handles it in a transaction.
-    const userId = res.locals.userId
     const army = res.locals.army
 
-    const resources = await turnModel.findResourcesByArmyId(army.id)
-    const units = await turnModel.findArmyUnitsWithTypes(army.id)
-    const equipmentRows = await turnModel.findArmyEquipmentWithTypes(army.id)
-    const equipmentTypes = await turnModel.findAllEquipmentTypes()
-    const progress = await turnModel.findCampaignProgressByArmyId(army.id)
-
-    if (!progress) {
-      return res.status(409).json({ error: 'Army has no campaign progress.' })
-    }
-
-    if (progress.gameCompleted) {
-      return res.status(409).json({ error: 'All campaigns have already been completed.' })
-    }
-
-    const campaign = await turnModel.findCampaignById(progress.campaignId)
-
-    if (!campaign) {
-      return res.status(409).json({ error: 'Campaign progress is missing its campaign.' })
-    }
-
-    if (!checkIfCampaignProductionIsValid(campaign)) {
-      return res.status(409).json({ error: 'Campaign production values are invalid.' })
-    }
-
-    const enemy = await turnModel.findEnemyByCampaignAndSequence(
-      progress.campaignId,
-      progress.currentEnemySequence
-    )
-
-    if (!enemy) {
-      return res.status(409).json({ error: 'Campaign progress is missing its enemy army.' })
-    }
-
-    // The utility functions keep the turn maths separate from HTTP handling.
+    // One starting snapshot keeps turn calculations consistent and avoids query ping-pong
+    const gameState = await userArmyModel.findArmyGameplayStateByArmyId(army.id)
+    const stateError = userArmyModel.getArmyStateError(gameState)
+    if (stateError) return res.status(409).json({ error: stateError })
+    const { resources, units, equipment: equipmentRow, progress } = gameState
+    const campaign = { campaignNumber: progress.campaignNumber, campaignName: `Campaign ${progress.campaignNumber}` }
+    const enemy = battleModel.findCurrentEnemy(progress)
     const upkeep = calculateUnitUpkeep(units)
-    const equipmentGain = calculateEquipmentGain(equipmentTypes, campaign)
+    const equipmentGain = calculateEquipmentGain(progress.campaignNumber)
+
+    // Production is added before upkeep, matching the documented turn order
     const turnResult = calculateTurnResult({
-      campaign,
-      currentTurn: progress.currentTurn,
-      resources,
-      upkeep,
-      equipmentGain
+      campaignNumber: progress.campaignNumber, currentTurn: progress.currentTurn,
+      resources, upkeep
     })
     const turnsOnCurrentEnemy = calculateNextTurnsOnCurrentEnemy(progress.turnsOnCurrentEnemy)
-    const enemyAttacked = checkIfEnemyShouldAutoAttack(
-      turnsOnCurrentEnemy,
-      ENEMY_ATTACK_AT_TURN
-    )
-    let battleResolution = null
+    const enemyAttacked = checkIfEnemyShouldAutoAttack(turnsOnCurrentEnemy, ENEMY_ATTACK_AT_TURN)
 
-    if (enemyAttacked) {
-      battleResolution = calculateBattleResolution({
-        campaign,
-        enemy,
-        resources: turnResult.resources,
-        units,
+    // Battle math is prepared only when the waiting counter actually reaches the threshold
+    const battleResolution = enemyAttacked ? calculateBattleResolution({
+      campaign, enemy, resources: turnResult.resources, units,
+      trigger: BATTLE_TRIGGER_ENEMY_AUTO_ATTACK, turnsOnCurrentEnemy,
+      enemyAttackAtTurn: ENEMY_ATTACK_AT_TURN
+    }) : null
+    // The model writes the turn and any auto-battle inside one transaction, all or nothing
+    const outcome = await turnModel.advanceTurn({
+      army, progress, turnResult, equipmentGain, equipmentRow, turnsOnCurrentEnemy,
+      enemyAttackAtTurn: ENEMY_ATTACK_AT_TURN, enemyAttacked, campaign, enemy, battleResolution
+    })
+    // Turn responses report effects and balances without cloning the complete army state
+    res.locals.data = {
+      turnNumber: turnResult.turnNumber,
+      campaignMultiplier: turnResult.campaignMultiplier,
+      gained: {
+        manpower: turnResult.manpowerGained,
+        flour: turnResult.flourGained,
+        supply: turnResult.supplyGained,
+        equipment: equipmentGain
+      },
+      consumed: {
+        flour: turnResult.flourConsumed,
+        supply: turnResult.supplyConsumed
+      },
+      moraleChange: turnResult.moraleChange,
+      resourceBalances: {
+        manpower: outcome.resources.manpower,
+        ducats: outcome.resources.ducats,
+        flour: outcome.resources.flour,
+        supply: outcome.resources.supply,
+        morale: outcome.resources.morale
+      },
+      equipmentBalances: {
+        horses: outcome.equipment.horses,
+        fieldGuns: outcome.equipment.fieldGuns,
+        muskets: outcome.equipment.muskets
+      },
+      enemyAttack: {
+        attacked: outcome.enemyAttacked,
+        attackAtTurn: ENEMY_ATTACK_AT_TURN,
+        turnsOnCurrentEnemy: outcome.progress.turnsOnCurrentEnemy
+      },
+      campaignProgress: toCampaignProgressSummary(outcome.progress)
+    }
+    if (outcome.enemyAttacked) {
+      // Attach battle details only when a battle really happened; no empty placeholder object
+      res.locals.data.battle = buildBattleResponse({
         trigger: BATTLE_TRIGGER_ENEMY_AUTO_ATTACK,
-        turnsOnCurrentEnemy,
-        enemyAttackAtTurn: ENEMY_ATTACK_AT_TURN
+        campaignNumber: progress.campaignNumber,
+        enemy,
+        resolution: battleResolution,
+        result: outcome.battleResult
       })
     }
-
-    const turnOutcome = await turnModel.advanceTurn({
-      army,
-      progress,
-      turnResult,
-      equipmentGain,
-      equipmentRows,
-      turnsOnCurrentEnemy,
-      enemyAttackAtTurn: ENEMY_ATTACK_AT_TURN,
-      enemyAttacked,
-      campaign,
-      enemy,
-      battleResolution
-    })
-
-    const state = await turnModel.findArmyStateByUserId(userId)
-    let turnsOnCurrentEnemyAfterTurn = turnsOnCurrentEnemy
-
-    if (state.campaignProgress) {
-      turnsOnCurrentEnemyAfterTurn = state.campaignProgress.turnsOnCurrentEnemy
-    }
-
-    res.locals.data = {
-      turnAdvanced: true,
-      enemyAttacked: turnOutcome.enemyAttacked,
-      enemyAttackAtTurn: ENEMY_ATTACK_AT_TURN,
-      turnsOnCurrentEnemy: turnsOnCurrentEnemyAfterTurn,
-      armyState: state
-    }
-
-    if (turnOutcome.enemyAttacked) {
-      res.locals.data.battle = {
-        trigger: BATTLE_TRIGGER_ENEMY_AUTO_ATTACK,
-        outcome: battleResolution.outcome,
-        enemyName: enemy.enemyName,
-        campaignName: campaign.campaignName,
-        playerFightingStrength: battleResolution.playerStrength.fightingStrength,
-        enemyFightingStrength: enemy.fightingStrength,
-        victoryType: battleResolution.victoryType,
-        hasCounterUnit: battleResolution.playerStrength.hasCounterUnit,
-        counterMultiplier: battleResolution.playerStrength.counterMultiplier,
-        resourceMultiplier: battleResolution.playerStrength.resourceMultiplier,
-        troopLosses: battleResolution.troopLosses,
-        armyReset: turnOutcome.battleResult.armyReset,
-        campaignCompleted: turnOutcome.battleResult.campaignCompleted,
-        gameCompleted: turnOutcome.battleResult.gameCompleted
-      }
-    }
-
     next()
   } catch (error) {
-    console.error('advanceTurn error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

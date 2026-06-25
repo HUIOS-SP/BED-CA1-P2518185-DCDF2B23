@@ -1,27 +1,30 @@
 import { asc, eq } from 'drizzle-orm'
 import { db } from '../db/db.js'
-import { campaignEnemyArmies, campaigns } from '../db/schema.js'
+import { campaignTemplateEnemies, campaignTemplates } from '../db/schema.js'
 
-// Campaign model reads the static three-campaign catalog and its enemies.
-// Reads all campaigns in campaign number order.
-export async function findAllCampaigns() {
-  return await db
+// Campaign model reads static flavour catalogue rows; active gameplay generates its own enemies
+// Reads all campaign templates in catalogue-number order
+export async function findAllCampaignTemplates() {
+  return db
     .select()
-    .from(campaigns)
-    .orderBy(asc(campaigns.campaignNumber))
+    .from(campaignTemplates)
+    .orderBy(asc(campaignTemplates.campaignNumber))
 }
 
-// Reads one campaign by id.
-export async function findCampaignById(campaignId) {
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
-  return campaign
+// Reads one campaign by id
+export async function findCampaignTemplateById(campaignTemplateId) {
+  const [campaignTemplate] = await db
+    .select()
+    .from(campaignTemplates)
+    .where(eq(campaignTemplates.id, campaignTemplateId))
+  return campaignTemplate
 }
 
-// Reads enemy rows that belong to a campaign in battle order.
-export async function findEnemiesByCampaignId(campaignId) {
-  return await db
+// Reads enemy rows that belong to a campaign template in battle order
+export async function findEnemiesByCampaignTemplateId(campaignTemplateId) {
+  return db
     .select()
-    .from(campaignEnemyArmies)
-    .where(eq(campaignEnemyArmies.campaignId, campaignId))
-    .orderBy(asc(campaignEnemyArmies.sequence))
+    .from(campaignTemplateEnemies)
+    .where(eq(campaignTemplateEnemies.campaignTemplateId, campaignTemplateId))
+    .orderBy(asc(campaignTemplateEnemies.sequence))
 }

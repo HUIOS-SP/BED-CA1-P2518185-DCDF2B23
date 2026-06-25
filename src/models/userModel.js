@@ -3,8 +3,8 @@ import { db } from '../db/db.js'
 import { users } from '../db/schema.js'
 import * as userArmyModel from './userArmyModel.js'
 
-// User model contains only database queries for user profiles.
-// Reads all users, optionally filtered by username.
+// User model contains only database queries for user profiles
+// Reads all users, optionally filtered by username
 export async function findAllUsers(filters = {}) {
   const query = db
     .select({
@@ -16,42 +16,30 @@ export async function findAllUsers(filters = {}) {
     .from(users)
 
   if (filters.username) {
-    return await query.where(eq(users.username, filters.username))
+    return query.where(eq(users.username, filters.username))
   }
 
-  return await query
+  return query
 }
 
-// Reads one user by primary key id.
+// Reads one user by primary key id
 export async function findUserById(userId) {
   const [user] = await db.select().from(users).where(eq(users.id, userId))
   return user
 }
 
-// Reads one user by unique username.
+// Reads one user by unique username
 export async function findUserByUsername(username) {
   const [user] = await db.select().from(users).where(eq(users.username, username))
   return user
 }
 
-// Inserts a new user row.
-export async function createUser(data) {
-  // SQLite generates the integer id automatically.
-  const [user] = await db.insert(users).values({
-    username: data.username,
-    password: data.password
-  }).returning()
-
-  return user
-}
-
-// Creates a new user and immediately starts their default game state.
+// Creates a new user and immediately starts their default game state
 export async function createUserWithStartingArmy(data) {
-  // User creation and starter army creation must succeed or fail together.
+  // User and starter army succeed or fail together, avoiding an orphan profile side quest
   const createdGame = await db.transaction(async (tx) => {
     const [user] = await tx.insert(users).values({
-      username: data.username,
-      password: data.password
+      username: data.username
     }).returning()
 
     const army = await userArmyModel.createArmyForUserInTransaction(
@@ -66,16 +54,10 @@ export async function createUserWithStartingArmy(data) {
     }
   })
 
-  const state = await userArmyModel.findArmyStateByUserId(createdGame.user.id)
-
-  return {
-    user: createdGame.user,
-    army: createdGame.army,
-    state
-  }
+  return createdGame
 }
 
-// Updates only the username field for one user.
+// Updates only the username field for one user
 export async function updateUsername(userId, username) {
   const [user] = await db
     .update(users)
@@ -86,7 +68,7 @@ export async function updateUsername(userId, username) {
   return user
 }
 
-// Deletes one user row by id.
+// Deletes one user row by id.. yeah
 export async function deleteUser(userId) {
   const [user] = await db.delete(users).where(eq(users.id, userId)).returning()
   return user

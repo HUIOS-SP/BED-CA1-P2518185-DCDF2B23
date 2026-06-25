@@ -1,30 +1,17 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from './db.js'
 import {
-  campaignEnemyArmies,
-  campaigns,
-  equipmentTypes,
+  campaignTemplateEnemies,
+  campaignTemplates,
   unitTypes
 } from './schema.js'
 import {
-  CAMPAIGNS,
-  EQUIPMENT_TYPES,
+  CAMPAIGN_TEMPLATES,
   UNIT_TYPES,
   VALID_WEAKNESSES
 } from '../constants/gameBalance.js'
 
-// Seed helpers check for existing rows so npm run db can be repeated safely.
-// Finds one equipment type by its unique name.
-async function findEquipmentByName(equipmentName) {
-  const [equipment] = await db
-    .select()
-    .from(equipmentTypes)
-    .where(eq(equipmentTypes.equipmentName, equipmentName))
-
-  return equipment
-}
-
-// Finds one unit type by its unique name.
+// Small lookup helpers make the upsert-style seed flow easy to follow
 async function findUnitByName(unitName) {
   const [unit] = await db
     .select()
@@ -34,62 +21,39 @@ async function findUnitByName(unitName) {
   return unit
 }
 
-// Finds one campaign by its fixed campaign number.
+// Finds one campaign template by its fixed catalogue number
 async function findCampaignByNumber(campaignNumber) {
   const [campaign] = await db
     .select()
-    .from(campaigns)
-    .where(eq(campaigns.campaignNumber, campaignNumber))
+    .from(campaignTemplates)
+    .where(eq(campaignTemplates.campaignNumber, campaignNumber))
 
   return campaign
 }
 
-// Finds the enemy at a specific sequence inside a campaign.
-async function findEnemyByCampaignAndSequence(campaignId, sequence) {
+// Finds the enemy at a specific sequence inside a campaign template
+async function findEnemyByTemplateAndSequence(campaignTemplateId, sequence) {
   const [enemy] = await db
     .select()
-    .from(campaignEnemyArmies)
+    .from(campaignTemplateEnemies)
     .where(and(
-      eq(campaignEnemyArmies.campaignId, campaignId),
-      eq(campaignEnemyArmies.sequence, sequence)
+      eq(campaignTemplateEnemies.campaignTemplateId, campaignTemplateId),
+      eq(campaignTemplateEnemies.sequence, sequence)
     ))
 
   return enemy
 }
 
-// Inserts or updates equipment catalog rows.
-async function seedEquipmentTypes() {
-  // Equipment must exist before unit types can reference it.
-  for (const equipmentType of EQUIPMENT_TYPES) {
-    const existingEquipment = await findEquipmentByName(equipmentType.equipmentName)
-
-    if (!existingEquipment) {
-      await db.insert(equipmentTypes).values(equipmentType)
-    } else {
-      await db
-        .update(equipmentTypes)
-        .set({ description: equipmentType.description })
-        .where(eq(equipmentTypes.id, existingEquipment.id))
-    }
-  }
-}
-
-// Inserts or updates unit catalog rows after their required equipment rows exist.
+// Inserts new unit rules or refreshes existing ones, making the seed safe to rerun
 async function seedUnitTypes() {
-  // Unit types reference the equipment type required for recruitment.
   for (const unitType of UNIT_TYPES) {
     const existingUnit = await findUnitByName(unitType.unitName)
-    const requiredEquipment = await findEquipmentByName(unitType.requiredEquipmentName)
-
-    if (!requiredEquipment) {
-      throw new Error(`Missing equipment type ${unitType.requiredEquipmentName}`)
-    }
 
     const unitValues = {
       unitName: unitType.unitName,
       baseStrength: unitType.baseStrength,
       requiredManpower: unitType.requiredManpower,
-      requiredEquipmentTypeId: requiredEquipment.id,
+      requiredEquipment: unitType.requiredEquipment,
       requiredEquipmentQty: unitType.requiredEquipmentQty,
       flourUpkeep: unitType.flourUpkeep,
       supplyUpkeep: unitType.supplyUpkeep,
@@ -107,10 +71,10 @@ async function seedUnitTypes() {
   }
 }
 
-// Inserts or updates campaign rows and their three ordered enemy rows.
-async function seedCampaigns() {
-  // Each campaign receives exactly the enemy rows defined in gameBalance.js.
-  for (const campaignData of CAMPAIGNS) {
+// Inserts or updates catalogue templates and their three ordered flavour enemies
+async function seedCampaignTemplates() {
+  // gameBalance.js is the seed source of truth; the database mirrors it on every run
+  for (const campaignData of CAMPAIGN_TEMPLATES) {
     let campaign = await findCampaignByNumber(campaignData.campaignNumber)
     const campaignValues = {
       campaignNumber: campaignData.campaignNumber,
@@ -130,27 +94,27 @@ async function seedCampaigns() {
     }
 
     if (!campaign) {
-      const [createdCampaign] = await db.insert(campaigns).values(campaignValues).returning()
+      const [createdCampaign] = await db.insert(campaignTemplates).values(campaignValues).returning()
       campaign = createdCampaign
     } else {
       const [updatedCampaign] = await db
-        .update(campaigns)
+        .update(campaignTemplates)
         .set(campaignValues)
-        .where(eq(campaigns.id, campaign.id))
+        .where(eq(campaignTemplates.id, campaign.id))
         .returning()
 
       campaign = updatedCampaign
     }
 
     for (const enemy of campaignData.enemies) {
-      // Weakness values must stay standardised for battle counter logic.
+      // Catch bad seed data early; a typo here would quietly break counter logic later
       if (!VALID_WEAKNESSES.includes(enemy.weakAgainstUnit)) {
         throw new Error(`Invalid weakness ${enemy.weakAgainstUnit} for ${enemy.enemyName}`)
       }
 
-      const existingEnemy = await findEnemyByCampaignAndSequence(campaign.id, enemy.sequence)
+      const existingEnemy = await findEnemyByTemplateAndSequence(campaign.id, enemy.sequence)
       const enemyValues = {
-        campaignId: campaign.id,
+        campaignTemplateId: campaign.id,
         sequence: enemy.sequence,
         enemyName: enemy.enemyName,
         fightingStrength: enemy.fightingStrength,
@@ -161,23 +125,21 @@ async function seedCampaigns() {
       }
 
       if (!existingEnemy) {
-        await db.insert(campaignEnemyArmies).values(enemyValues)
+        await db.insert(campaignTemplateEnemies).values(enemyValues)
       } else {
         await db
-          .update(campaignEnemyArmies)
+          .update(campaignTemplateEnemies)
           .set(enemyValues)
-          .where(eq(campaignEnemyArmies.id, existingEnemy.id))
+          .where(eq(campaignTemplateEnemies.id, existingEnemy.id))
       }
     }
   }
 }
 
-// Seeds all static game content in foreign-key-safe order.
+// Seed parent rows before child rows so foreign-key inserts do not fail
 export async function seedDatabase() {
-  // Seed order matters because of foreign keys.
-  await seedEquipmentTypes()
   await seedUnitTypes()
-  await seedCampaigns()
+  await seedCampaignTemplates()
   console.log('Seeded Leviathan catalog data.')
 }
 
