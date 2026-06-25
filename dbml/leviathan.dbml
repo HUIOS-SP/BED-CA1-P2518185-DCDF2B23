@@ -1,0 +1,123 @@
+// All primary keys are integer auto-increment IDs.
+
+Table users {
+  id integer [pk, increment]
+  username varchar(50) [not null, unique]
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table armies {
+  id integer [pk, increment]
+  user_id integer [not null, unique, note: 'One army per user']
+  army_name varchar(50) [not null]
+  updated_at timestamp
+}
+
+Table army_resources {
+  id integer [pk, increment]
+  army_id integer [not null, unique]
+  manpower integer [not null, default: 120]
+  ducats integer [not null, default: 180]
+  flour integer [not null, default: 120]
+  supply integer [not null, default: 100]
+  morale integer [not null, default: 50, note: 'Application clamps to 0..100']
+}
+
+Table army_equipment {
+  id integer [pk, increment]
+  army_id integer [not null, unique, note: 'Exactly one equipment row per army']
+  horses integer [not null, default: 0]
+  field_guns integer [not null, default: 0]
+  muskets integer [not null, default: 0]
+}
+
+Table unit_types {
+  id integer [pk, increment]
+  unit_name varchar [not null, unique, note: 'infantry, cavalry, artillery']
+  base_strength integer [not null]
+  required_manpower integer [not null]
+  required_equipment varchar [not null, note: 'muskets, horses, field_guns']
+  required_equipment_qty integer [not null, default: 0]
+  flour_upkeep integer [not null]
+  supply_upkeep integer [not null]
+  battle_supply_cost integer [not null]
+}
+
+Table army_units {
+  id integer [pk, increment]
+  army_id integer [not null]
+  unit_type_id integer [not null]
+  quantity integer [not null, default: 0]
+
+  indexes {
+    (army_id, unit_type_id) [unique]
+  }
+}
+
+// These two tables are a read-only flavour/template dataset.
+// Endless active gameplay generates enemies from army_campaign_progress instead.
+Table campaign_templates {
+  id integer [pk, increment]
+  campaign_number integer [not null, unique]
+  campaign_name varchar [not null, unique]
+  enemy_nation varchar [not null]
+  description varchar
+  major_reward_ducats integer [not null, default: 0]
+  major_reward_manpower integer [not null, default: 0]
+  major_reward_supply integer [not null, default: 0]
+  major_reward_morale integer [not null, default: 0]
+  manpower_gain_per_turn integer [not null]
+  muskets_gain_per_turn integer [not null]
+  horses_gain_per_turn integer [not null]
+  field_guns_gain_per_turn integer [not null]
+  flour_gain_per_turn integer [not null]
+  supply_gain_per_turn integer [not null]
+}
+
+Table campaign_template_enemies {
+  id integer [pk, increment]
+  campaign_template_id integer [not null]
+  sequence integer [not null]
+  enemy_name varchar [not null]
+  fighting_strength integer [not null]
+  weak_against_unit varchar [not null, default: 'none']
+  minor_reward_ducats integer [not null, default: 0]
+  minor_reward_manpower integer [not null, default: 0]
+  minor_reward_supply integer [not null, default: 0]
+
+  indexes {
+    (campaign_template_id, sequence) [unique]
+  }
+}
+
+Table army_campaign_progress {
+  id integer [pk, increment]
+  army_id integer [not null, unique, note: 'One current endless-progress row per army']
+  campaign_number integer [not null, default: 1, note: 'Unbounded endless depth']
+  current_turn integer [not null, default: 1]
+  current_enemy_sequence integer [not null, default: 1, note: 'Application values 1..3']
+  current_faction varchar [not null, note: 'liho, koi, bingxue']
+  campaigns_completed integer [not null, default: 0, note: 'Maintained as campaign_number - 1']
+  turns_on_current_enemy integer [not null, default: 0, note: 'Auto-attack resolves when this reaches 6']
+  updated_at timestamp
+}
+
+Table army_log {
+  id integer [pk, increment]
+  army_id integer [not null]
+  turn_number integer
+  event_type varchar [not null]
+  message varchar [not null]
+  details varchar [note: 'Optional JSON text; mapped to an object by Drizzle']
+  created_at timestamp
+}
+
+Ref: armies.user_id > users.id [delete: cascade]
+Ref: army_resources.army_id > armies.id [delete: cascade]
+Ref: army_equipment.army_id > armies.id [delete: cascade]
+Ref: army_units.army_id > armies.id [delete: cascade]
+Ref: army_units.unit_type_id > unit_types.id
+Ref: campaign_template_enemies.campaign_template_id > campaign_templates.id [delete: cascade]
+Ref: army_campaign_progress.army_id > armies.id [delete: cascade]
+Ref: army_log.army_id > armies.id [delete: cascade]
