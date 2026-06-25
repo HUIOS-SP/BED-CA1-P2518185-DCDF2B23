@@ -6,7 +6,7 @@ import * as response from '../middleware/response.js'
 const router = Router()
 
 // GET /campaigns
-// Read-only catalog route for frontend display and Postman inspection.
+// Read-only catalogue route for frontend display and Postman inspection
 // Query input: none
 // Body input: none
 router.get(
@@ -17,7 +17,7 @@ router.get(
 )
 
 // GET /campaigns/:campaignId/enemies
-// Read-only catalog route; it does not change a user's campaign progress.
+// These are example catalogue enemies only and do not change active endless progress
 // URL input: campaignId
 // Body input: none
 router.get(

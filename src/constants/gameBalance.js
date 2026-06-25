@@ -1,6 +1,6 @@
-// Game balance constants live here so controllers do not contain magic numbers.
+// Game balance constants live here so controllers do not contain magic numbers
 
-// Starting resources given to every newly created or reset army.
+// Starting resources given to every newly created or reset army
 export const STARTING_RESOURCES = {
   manpower: 120,
   ducats: 180,
@@ -9,40 +9,43 @@ export const STARTING_RESOURCES = {
   morale: 50
 }
 
-// Starting equipment rows created for every new or reset army.
+// Starting equipment stored in the army's single equipment row
 export const STARTING_EQUIPMENT = {
   muskets: 80,
   horses: 25,
-  field_guns: 8
+  fieldGuns: 8
 }
 
-// Starting unit quantities created for every new or reset army.
+// Universal endless-mode production, while seeded template production is reference metadata only
+export const BASE_RESOURCE_GAIN_PER_TURN = {
+  manpower: 25,
+  flour: 13,
+  supply: 14
+}
+
+export const BASE_EQUIPMENT_GAIN_PER_TURN = {
+  muskets: 8,
+  horses: 3,
+  fieldGuns: 2
+}
+
+// Starting unit quantities created for every new or reset army
 export const STARTING_UNITS = {
   infantry: 0,
   cavalry: 0,
   artillery: 0
 }
 
-// Unit names that the player can recruit.
-export const VALID_UNIT_NAMES = ['infantry', 'cavalry', 'artillery']
-
-// Enemy weakness values allowed in campaign enemy data.
+// Enemy weakness values allowed in campaign enemy data
 export const VALID_WEAKNESSES = ['none', 'infantry', 'cavalry', 'artillery']
 
-// Static equipment catalog used by seed.js.
-export const EQUIPMENT_TYPES = [
-  { equipmentName: 'muskets', description: 'Standard firearms used by infantry.' },
-  { equipmentName: 'horses', description: 'Mounts required to recruit cavalry.' },
-  { equipmentName: 'field_guns', description: 'Heavy guns required to recruit artillery.' }
-]
-
-// Static unit catalog used by seed.js.
+// Static unit catalog used by seed.js
 export const UNIT_TYPES = [
   {
     unitName: 'infantry',
     baseStrength: 10,
     requiredManpower: 10,
-    requiredEquipmentName: 'muskets',
+    requiredEquipment: 'muskets',
     requiredEquipmentQty: 10,
     flourUpkeep: 3,
     supplyUpkeep: 1,
@@ -52,7 +55,7 @@ export const UNIT_TYPES = [
     unitName: 'cavalry',
     baseStrength: 18,
     requiredManpower: 15,
-    requiredEquipmentName: 'horses',
+    requiredEquipment: 'horses',
     requiredEquipmentQty: 5,
     flourUpkeep: 3,
     supplyUpkeep: 1,
@@ -62,7 +65,7 @@ export const UNIT_TYPES = [
     unitName: 'artillery',
     baseStrength: 28,
     requiredManpower: 20,
-    requiredEquipmentName: 'field_guns',
+    requiredEquipment: 'field_guns',
     requiredEquipmentQty: 2,
     flourUpkeep: 1,
     supplyUpkeep: 2,
@@ -70,7 +73,7 @@ export const UNIT_TYPES = [
   }
 ]
 
-// Camp follower prices for buying and selling resources.
+// Camp-follower prices deliberately use a spread, so buying and reselling is not free money
 export const TRADE_PRICES = {
   flour: {
     buy: 2,
@@ -82,13 +85,17 @@ export const TRADE_PRICES = {
   }
 }
 
-// Campaign progression is intentionally linear
-export const FIRST_CAMPAIGN_NUMBER = 1
-export const FINAL_CAMPAIGN_NUMBER = 3
+// Endless campaigns contain three enemies each
 export const ENEMIES_PER_CAMPAIGN = 3
 export const ENEMY_ATTACK_AT_TURN = 6
 
-// Battle multipliers kept here so game balance can be tweaked without route edits.
+export const ENEMY_FACTIONS = {
+  liho: { key: 'liho', name: 'Duchy of Liho' },
+  koi: { key: 'koi', name: 'Koi Konfederacy' },
+  bingxue: { key: 'bingxue', name: 'Bingxue Commonwealth' }
+}
+
+// Battle tuning lives together here, making balance changes a one-stop shop
 export const BATTLE_COUNTER_MULTIPLIER = 1.1
 export const BATTLE_NO_COUNTER_MULTIPLIER = 1
 export const BATTLE_FULL_RESOURCE_MULTIPLIER = 1
@@ -106,13 +113,13 @@ export const BATTLE_PYRRHIC_VICTORY_TROOP_LOSS_RATE = 0.2
 export const BATTLE_STANDARD_VICTORY_TROOP_LOSS_RATE = 0.1
 export const BATTLE_DECISIVE_VICTORY_TROOP_LOSS_RATE = 0.05
 
-// Morale is clamped so it never goes below 0 or above 100.
+// Morale is clamped so it never goes below 0 or above 100
 export const MORALE_MIN = 0
 export const MORALE_MAX = 100
 export const LOW_FLOUR_MORALE_PENALTY = -5
 
-// Static campaign and enemy data used by seed.js.
-export const CAMPAIGNS = [
+// Static campaign-template and enemy data used by seed.js
+export const CAMPAIGN_TEMPLATES = [
   {
     campaignNumber: 1,
     campaignName: 'Unix Wars',

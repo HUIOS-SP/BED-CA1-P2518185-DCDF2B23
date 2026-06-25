@@ -7,16 +7,17 @@ import {
   USERNAME_MAX_LENGTH
 } from '../constants/validation.js'
 import * as userModel from '../models/userModel.js'
+import { toArmyView } from '../utils/responseFormatter.js'
 
-// Keeps the generated army name inside the same limit as user-supplied names.
+// Keeps the generated army name inside the same limit as user-supplied names
 function getDefaultArmyName(username) {
   const suffix = ' Army'
   const availableUsernameLength = ARMY_NAME_MAX_LENGTH - suffix.length
   return `${username.slice(0, availableUsernameLength)}${suffix}`
 }
 
-// Handles user profile CRUD routes.
-// Reads all users, optionally filtered by username query parameter.
+// Handles user profile CRUD routes
+// Reads all users, optionally filtered by username query parameter
 export const getUsers = async (req, res, next) => {
   try {
     const { username } = req.query
@@ -36,32 +37,28 @@ export const getUsers = async (req, res, next) => {
     res.locals.data = users
     next()
   } catch (error) {
-    console.error('getUsers error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Reads one user by the userId URL parameter.
+// Reads one user by the userId URL parameter
 export const getUserById = async (req, res, next) => {
   try {
     res.locals.data = res.locals.user
     next()
   } catch (error) {
-    console.error('getUserById error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Creates a new user profile using username and password from the body.
+// Creates a new user profile and its starter army
 export const createUser = async (req, res, next) => {
   try {
     const body = getRequestBody(req)
-    const { username, password, armyName } = body
+    const { username, armyName } = body
 
-    if (!checkIfNonEmptyString(username) || !checkIfNonEmptyString(password)) {
-      return res.status(400).json({
-        error: 'Username and password are required.'
-      })
+    if (!checkIfNonEmptyString(username)) {
+      return res.status(400).json({ error: 'Username is required.' })
     }
 
     const trimmedUsername = username.trim()
@@ -96,39 +93,35 @@ export const createUser = async (req, res, next) => {
       return res.status(409).json({ error: 'Username already exists.' })
     }
 
-    // auto create army, one user one army philosophy
+    // One user, one army: create both together so nobody spawns into the void
     const createdGame = await userModel.createUserWithStartingArmy({
       username: trimmedUsername,
-      password,
       armyName: startingArmyName
     })
 
     res.locals.data = {
       id: createdGame.user.id,
       username: createdGame.user.username,
-      password: createdGame.user.password,
       createdAt: createdGame.user.createdAt,
       updatedAt: createdGame.user.updatedAt,
-      army: createdGame.army,
-      state: createdGame.state
+      army: toArmyView(createdGame.army)
     }
     next()
   } catch (error) {
-    console.error('createUser error:', error)
-
-    if (error.message === 'Game catalogs must be seeded before creating an army.') {
+    if (error.message === 'Unit types must be seeded before creating an army.') {
       return res.status(409).json({ error: error.message })
     }
 
+    // The earlier lookup gives a friendly error; this also covers a last-second race
     if (typeof error.message === 'string' && error.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'Username already exists.' })
     }
 
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Updates only the username for one user.
+// Updates only the username for one user
 export const updateUser = async (req, res, next) => {
   try {
     const userId = res.locals.userId
@@ -158,12 +151,11 @@ export const updateUser = async (req, res, next) => {
     res.locals.data = updatedUser
     next()
   } catch (error) {
-    console.error('updateUser error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Deletes one user by id.
+// Deletes one user by id
 export const deleteUser = async (req, res, next) => {
   try {
     const userId = res.locals.userId
@@ -172,7 +164,6 @@ export const deleteUser = async (req, res, next) => {
 
     next()
   } catch (error) {
-    console.error('deleteUser error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

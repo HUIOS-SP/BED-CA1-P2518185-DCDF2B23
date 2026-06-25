@@ -5,6 +5,7 @@ import * as userMiddleware from '../middleware/userMiddleware.js'
 
 const router = Router()
 
+// User routes cover profile CRUD only; army gameplay has its own route module
 // GET /users
 // Query input: optional username
 // Body input: none
@@ -15,15 +16,14 @@ router.get(
   response.sendResponse
 )
 
-// CREATE USER NOW CREATES USER AND ARMY
 // POST /users
 // URL input: none
-// Body input: username, password, optional armyName
+// Body input: username, optional armyName
 router.post(
   '/',
   userController.createUser,
   response.withMessage(
-    'User created successfully. Starting army created and Unix Wars started.',
+    'User created successfully. Starting army and endless campaign created.',
     201
   ),
   response.sendResponse
@@ -44,7 +44,6 @@ router.get(
 // PUT /users/:userId
 // URL input: userId
 // Body input: username
-// HUGE VULNERABILITY CUZ IT RETURNS USER PASSWORD (maybe fix in CA2?)
 router.put(
   '/:userId',
   userMiddleware.checkUserId,
@@ -65,5 +64,4 @@ router.delete(
   response.sendNoContent
 )
 
-// im not sure if we need to do user login yet so dont do first
 export default router

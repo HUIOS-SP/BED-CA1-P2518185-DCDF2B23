@@ -2,7 +2,7 @@ import { checkAndGetPositiveInteger } from '../utils/helper.js'
 import * as userArmyModel from '../models/userArmyModel.js'
 import * as userModel from '../models/userModel.js'
 
-// Validates the userId URL parameter once and shares it through res.locals.
+// Validates userId once and shares the parsed number through res.locals
 export function checkUserId(req, res, next) {
   const userId = checkAndGetPositiveInteger(req.params.userId)
 
@@ -14,7 +14,7 @@ export function checkUserId(req, res, next) {
   next()
 }
 
-// Loads the user row for routes that require an existing user.
+// Loads the user row before the controller, so controllers can focus on their actual job
 export async function loadUser(req, res, next) {
   try {
     const user = await userModel.findUserById(res.locals.userId)
@@ -26,12 +26,11 @@ export async function loadUser(req, res, next) {
     res.locals.user = user
     next()
   } catch (error) {
-    console.error('loadUser middleware error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Loads the user's army for gameplay routes.
+// Loads the user's one army, with the schema enforcing one-user-one-army to keep this simple
 export async function loadUserArmy(req, res, next) {
   try {
     const army = await userArmyModel.findArmyByUserId(res.locals.userId)
@@ -43,7 +42,6 @@ export async function loadUserArmy(req, res, next) {
     res.locals.army = army
     next()
   } catch (error) {
-    console.error('loadUserArmy middleware error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

@@ -1,30 +1,34 @@
 import * as campaignModel from '../models/campaignModel.js'
+import {
+  toCampaignTemplateEnemyView,
+  toCampaignTemplateView
+} from '../utils/responseFormatter.js'
 
-// Handles read-only campaign catalog routes.
-// Reads the three fixed campaigns in campaign order.
+// Handles the read-only campaign catalogue; endless gameplay does not depend on these rows
+// Reads the three fixed campaign templates in catalogue order
 export const getCampaigns = async (req, res, next) => {
   try {
-    const campaigns = await campaignModel.findAllCampaigns()
+    const campaigns = await campaignModel.findAllCampaignTemplates()
 
-    res.locals.data = campaigns
+    // Public views intentionally leave the legacy production/reward metadata backstage
+    res.locals.data = campaigns.map(toCampaignTemplateView)
     next()
   } catch (error) {
-    console.error('getCampaigns error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
 
-// Reads the enemies that belong to one campaign.
+// Reads the enemies that belong to one campaign template
 export const getCampaignEnemies = async (req, res, next) => {
   try {
     const campaignId = res.locals.campaignId
 
-    const enemies = await campaignModel.findEnemiesByCampaignId(campaignId)
+    const enemies = await campaignModel.findEnemiesByCampaignTemplateId(campaignId)
 
-    res.locals.data = enemies
+    // Same idea here: identity, strength, and weakness are enough for catalogue clients
+    res.locals.data = enemies.map(toCampaignTemplateEnemyView)
     next()
   } catch (error) {
-    console.error('getCampaignEnemies error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }

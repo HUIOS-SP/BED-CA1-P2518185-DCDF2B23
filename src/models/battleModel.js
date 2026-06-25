@@ -1,470 +1,141 @@
-import { and, eq } from 'drizzle-orm'
-import { getObjectValueOrDefault } from '../utils/helper.js'
+import { eq } from 'drizzle-orm'
 import { db } from '../db/db.js'
 import {
-  armies,
-  armyCampaignProgress,
-  armyEquipment,
-  armyLogs,
-  armyResources,
-  armyUnits,
-  campaignEnemyArmies,
-  campaigns,
-  equipmentTypes,
-  unitTypes
+  armies, armyCampaignProgress, armyEquipment, armyLogs, armyResources, armyUnits
 } from '../db/schema.js'
 import {
-  BATTLE_LOW_RESOURCE_MORALE_PENALTY,
-  BATTLE_VICTORY_MORALE_GAIN,
-  ENEMIES_PER_CAMPAIGN,
-  FINAL_CAMPAIGN_NUMBER,
-  FIRST_CAMPAIGN_NUMBER,
-  STARTING_EQUIPMENT,
-  STARTING_RESOURCES,
-  STARTING_UNITS
+  BATTLE_LOW_RESOURCE_MORALE_PENALTY, BATTLE_VICTORY_MORALE_GAIN,
+  ENEMIES_PER_CAMPAIGN, STARTING_EQUIPMENT, STARTING_RESOURCES, STARTING_UNITS
 } from '../constants/gameBalance.js'
-import { clampMorale, resetTurnsOnCurrentEnemy } from '../utils/turnCalculator.js'
+import { clampMorale } from '../utils/turnCalculator.js'
+import { generateCurrentEnemy, getRandomFactionKey } from '../utils/enemyGenerator.js'
+import { getObjectValueOrDefault } from '../utils/helper.js'
+import * as userArmyModel from './userArmyModel.js'
 
-// Battle model owns battle-specific reads and the battle transaction.
-// Reads the one army owned by a user.
-export async function findArmyByUserId(userId) {
-  const [army] = await db.select().from(armies).where(eq(armies.userId, userId))
-  return army
+// Converts stored progress into the generated opponent used by both battle entry points
+export function findCurrentEnemy(progress) {
+  return generateCurrentEnemy({
+    campaignNumber: progress.campaignNumber,
+    enemySequence: progress.currentEnemySequence,
+    factionKey: progress.currentFaction
+  })
 }
 
-// Reads the one campaign progress row for an army.
-export async function findCampaignProgressByArmyId(armyId, client = db) {
-  const [progress] = await client
-    .select()
-    .from(armyCampaignProgress)
-    .where(eq(armyCampaignProgress.armyId, armyId))
-
-  return progress
-}
-
-// Reads the campaign row used for progression and major rewards.
-export async function findCampaignById(campaignId, client = db) {
-  const [campaign] = await client
-    .select()
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-
-  return campaign
-}
-
-// Reads a campaign by number for first-campaign reset and next-campaign progress.
-async function findCampaignByNumber(campaignNumber, client = db) {
-  const [campaign] = await client
-    .select()
-    .from(campaigns)
-    .where(eq(campaigns.campaignNumber, campaignNumber))
-
-  return campaign
-}
-
-// Reads the enemy selected by the current campaign progress.
-export async function findEnemyByCampaignAndSequence(campaignId, sequence, client = db) {
-  const [enemy] = await client
-    .select()
-    .from(campaignEnemyArmies)
-    .where(and(
-      eq(campaignEnemyArmies.campaignId, campaignId),
-      eq(campaignEnemyArmies.sequence, sequence)
-    ))
-
-  return enemy
-}
-
-// Reads army resources before battle calculations.
-export async function findResourcesByArmyId(armyId) {
-  const [resources] = await db.select().from(armyResources).where(eq(armyResources.armyId, armyId))
-  return resources
-}
-
-// Reads unit quantities and strengths before battle calculations.
-export async function findArmyUnitsWithTypes(armyId, client = db) {
-  return await client
-    .select({
-      armyUnitId: armyUnits.id,
-      armyId: armyUnits.armyId,
-      unitTypeId: armyUnits.unitTypeId,
-      unitName: unitTypes.unitName,
-      quantity: armyUnits.quantity,
-      baseStrength: unitTypes.baseStrength,
-      requiredManpower: unitTypes.requiredManpower,
-      requiredEquipmentTypeId: unitTypes.requiredEquipmentTypeId,
-      requiredEquipmentQty: unitTypes.requiredEquipmentQty,
-      flourUpkeep: unitTypes.flourUpkeep,
-      supplyUpkeep: unitTypes.supplyUpkeep,
-      battleSupplyCost: unitTypes.battleSupplyCost
-    })
-    .from(armyUnits)
-    .innerJoin(unitTypes, eq(armyUnits.unitTypeId, unitTypes.id))
-    .where(eq(armyUnits.armyId, armyId))
-}
-
-// Reads equipment quantities with equipment names for state output and reset work.
-async function findArmyEquipmentWithTypes(armyId, client = db) {
-  return await client
-    .select({
-      id: armyEquipment.id,
-      armyId: armyEquipment.armyId,
-      equipmentTypeId: armyEquipment.equipmentTypeId,
-      equipmentName: equipmentTypes.equipmentName,
-      quantity: armyEquipment.quantity
-    })
-    .from(armyEquipment)
-    .innerJoin(equipmentTypes, eq(armyEquipment.equipmentTypeId, equipmentTypes.id))
-    .where(eq(armyEquipment.armyId, armyId))
-}
-
-// Reads the one linear campaign progress row with its current enemy.
-export async function findCampaignProgressDetailsByArmyId(armyId, client = db) {
-  const [progress] = await client
-    .select({
-      id: armyCampaignProgress.id,
-      armyId: armyCampaignProgress.armyId,
-      campaignId: armyCampaignProgress.campaignId,
-      currentTurn: armyCampaignProgress.currentTurn,
-      currentEnemySequence: armyCampaignProgress.currentEnemySequence,
-      turnsOnCurrentEnemy: armyCampaignProgress.turnsOnCurrentEnemy,
-      gameCompleted: armyCampaignProgress.gameCompleted,
-      campaignNumber: campaigns.campaignNumber,
-      campaignName: campaigns.campaignName,
-      manpowerGainPerTurn: campaigns.manpowerGainPerTurn,
-      musketsGainPerTurn: campaigns.musketsGainPerTurn,
-      horsesGainPerTurn: campaigns.horsesGainPerTurn,
-      fieldGunsGainPerTurn: campaigns.fieldGunsGainPerTurn,
-      flourGainPerTurn: campaigns.flourGainPerTurn,
-      supplyGainPerTurn: campaigns.supplyGainPerTurn,
-      enemyNation: campaigns.enemyNation,
-      enemyName: campaignEnemyArmies.enemyName,
-      enemyFightingStrength: campaignEnemyArmies.fightingStrength,
-      weakAgainstUnit: campaignEnemyArmies.weakAgainstUnit
-    })
-    .from(armyCampaignProgress)
-    .innerJoin(campaigns, eq(armyCampaignProgress.campaignId, campaigns.id))
-    .innerJoin(campaignEnemyArmies, and(
-      eq(campaignEnemyArmies.campaignId, armyCampaignProgress.campaignId),
-      eq(campaignEnemyArmies.sequence, armyCampaignProgress.currentEnemySequence)
-    ))
-    .where(eq(armyCampaignProgress.armyId, armyId))
-
-  return progress
-}
-
-// Builds the updated army state after battle.
-export async function findArmyStateByUserId(userId) {
-  const army = await findArmyByUserId(userId)
-
-  if (!army) {
-    return undefined
-  }
-
-  const [resources, equipment, units, campaignProgress] = await Promise.all([
-    findResourcesByArmyId(army.id),
-    findArmyEquipmentWithTypes(army.id),
-    findArmyUnitsWithTypes(army.id),
-    findCampaignProgressDetailsByArmyId(army.id)
-  ])
-
-  return {
-    army,
-    resources,
-    equipment,
-    units,
-    campaignProgress
+// Applies calculated casualties to each owned unit row
+async function applyTroopLosses(tx, troopLosses) {
+  for (const loss of troopLosses) {
+    await tx.update(armyUnits).set({ quantity: loss.quantityAfter })
+      .where(eq(armyUnits.id, loss.armyUnitId))
   }
 }
 
-// Resets resources, equipment, units, turn count, and campaign progress after defeat.
-async function resetArmyToFirstCampaign(tx, army, enemy, battleDetails, battleTurnNumber) {
-  const firstCampaign = await findCampaignByNumber(FIRST_CAMPAIGN_NUMBER, tx)
-
-  if (!firstCampaign) {
-    throw new Error('First campaign is missing from the database.')
-  }
-
-  await tx
-    .update(armies)
-    .set({ updatedAt: new Date() })
-    .where(eq(armies.id, army.id))
-
-  await tx
-    .update(armyResources)
-    .set(STARTING_RESOURCES)
-    .where(eq(armyResources.armyId, army.id))
-
-  const equipmentRows = await findArmyEquipmentWithTypes(army.id, tx)
-
-  for (const equipment of equipmentRows) {
-    await tx
-      .update(armyEquipment)
-      .set({
-        quantity: getObjectValueOrDefault(STARTING_EQUIPMENT, equipment.equipmentName, 0)
-      })
-      .where(eq(armyEquipment.id, equipment.id))
-  }
-
-  const unitRows = await findArmyUnitsWithTypes(army.id, tx)
-
-  for (const unit of unitRows) {
-    await tx
-      .update(armyUnits)
-      .set({
-        quantity: getObjectValueOrDefault(STARTING_UNITS, unit.unitName, 0)
-      })
+// Defeat resets the army's mutable loadout but preserves endless campaign depth
+async function applyDefeat(tx, { army, progress, enemy, battleDetails, battleTurnNumber }) {
+  // Reset everything inside the caller's transaction because a half-reset army would be a mess
+  await tx.update(armies).set({ updatedAt: new Date() }).where(eq(armies.id, army.id))
+  await tx.update(armyResources).set(STARTING_RESOURCES).where(eq(armyResources.armyId, army.id))
+  await tx.update(armyEquipment).set(STARTING_EQUIPMENT).where(eq(armyEquipment.armyId, army.id))
+  const units = await userArmyModel.findArmyUnitsWithTypes(army.id, tx)
+  for (const unit of units) {
+    await tx.update(armyUnits)
+      .set({ quantity: getObjectValueOrDefault(STARTING_UNITS, unit.unitName, 0) })
       .where(eq(armyUnits.id, unit.armyUnitId))
   }
-
-  const [progress] = await tx
-    .update(armyCampaignProgress)
-    .set({
-      campaignId: firstCampaign.id,
-      currentTurn: 1,
-      currentEnemySequence: 1,
-      turnsOnCurrentEnemy: resetTurnsOnCurrentEnemy(),
-      gameCompleted: false,
-      updatedAt: new Date()
-    })
-    .where(eq(armyCampaignProgress.armyId, army.id))
-    .returning()
-
+  const [updatedProgress] = await tx.update(armyCampaignProgress).set({
+    currentEnemySequence: 1,
+    turnsOnCurrentEnemy: 0,
+    updatedAt: new Date()
+  }).where(eq(armyCampaignProgress.id, progress.id)).returning()
   await tx.insert(armyLogs).values({
     armyId: army.id,
     turnNumber: battleTurnNumber,
-    eventType: 'battle',
-    message: `Defeated by ${enemy.enemyName}. Army reset to ${firstCampaign.campaignName}.`,
-    details: JSON.stringify(battleDetails)
+    eventType: 'battle_defeat',
+    message: `Defeated by ${enemy.enemyName}. Campaign ${progress.campaignNumber} restarted from enemy 1.`,
+    details: battleDetails
   })
-
-  return progress
-}
-
-// Applies victory troop losses to army_units rows.
-async function applyVictoryTroopLosses(tx, troopLosses) {
-  for (const troopLoss of troopLosses) {
-    await tx
-      .update(armyUnits)
-      .set({ quantity: troopLoss.quantityAfter })
-      .where(eq(armyUnits.id, troopLoss.armyUnitId))
+  // Return authoritative post-reset values for the action response
+  return {
+    progress: updatedProgress,
+    campaignCompleted: false,
+    armyReset: true,
+    resources: { ...STARTING_RESOURCES },
+    equipment: { ...STARTING_EQUIPMENT }
   }
 }
 
-// Applies victory rewards and moves the user to the next enemy or campaign.
-async function applyVictoryProgress(
-  tx,
-  army,
-  campaign,
-  progress,
-  enemy,
-  resources,
-  battleCost,
-  battleDetails,
-  troopLosses,
-  battleTurnNumber
-) {
+// Victory spends battle resources, grants scaled rewards, applies losses, and advances progress
+async function applyVictory(tx, args) {
+  const { army, progress, enemy, resources, battleCost, battleDetails, troopLosses, battleTurnNumber } = args
   let moraleChange = BATTLE_VICTORY_MORALE_GAIN
-
   if (!battleDetails.hasEnoughFlour || !battleDetails.hasEnoughSupply) {
-    moraleChange = moraleChange + BATTLE_LOW_RESOURCE_MORALE_PENALTY
+    moraleChange += BATTLE_LOW_RESOURCE_MORALE_PENALTY
   }
 
-  // Rewards and battle costs are calculated before writing so the transaction stays clear.
+  // Rewards scale with the generated enemy, keeping the economy aligned with endless depth
+  const rewardMultiplier = enemy.difficultyMultiplier
   const resourceChanges = {
-    manpower: resources.manpower + enemy.minorRewardManpower,
-    ducats: resources.ducats + enemy.minorRewardDucats,
+    manpower: resources.manpower + Math.round(10 * rewardMultiplier),
+    ducats: resources.ducats + Math.round(40 * rewardMultiplier),
     flour: Math.max(0, resources.flour - battleCost.flour),
-    supply: Math.max(0, resources.supply - battleCost.supply) + enemy.minorRewardSupply,
+    supply: Math.max(0, resources.supply - battleCost.supply) + Math.round(5 * rewardMultiplier),
     morale: clampMorale(resources.morale + moraleChange)
   }
+  await tx.update(armyResources).set(resourceChanges).where(eq(armyResources.armyId, army.id))
+  await applyTroopLosses(tx, troopLosses)
 
-  let campaignCompleted = false
-  let gameCompleted = false
-  let nextCampaign = null
-
-  if (progress.currentEnemySequence >= ENEMIES_PER_CAMPAIGN) {
-    campaignCompleted = true
-    resourceChanges.manpower = resourceChanges.manpower + campaign.majorRewardManpower
-    resourceChanges.ducats = resourceChanges.ducats + campaign.majorRewardDucats
-    resourceChanges.supply = resourceChanges.supply + campaign.majorRewardSupply
-    resourceChanges.morale = clampMorale(resourceChanges.morale + campaign.majorRewardMorale)
-
-    if (campaign.campaignNumber >= FINAL_CAMPAIGN_NUMBER) {
-      gameCompleted = true
-    } else {
-      nextCampaign = await findCampaignByNumber(campaign.campaignNumber + 1, tx)
-
-      if (!nextCampaign) {
-        throw new Error('Next campaign is missing from the database.')
-      }
-    }
-  }
-
-  await tx
-    .update(armyResources)
-    .set(resourceChanges)
-    .where(eq(armyResources.armyId, army.id))
-
-  // Casualties are saved in the same transaction as rewards and progress.
-  await applyVictoryTroopLosses(tx, troopLosses)
-
-  let progressAfterBattle = progress
-
-  if (gameCompleted) {
-    const [completedProgress] = await tx
-      .update(armyCampaignProgress)
-      .set({
-        turnsOnCurrentEnemy: resetTurnsOnCurrentEnemy(),
-        gameCompleted: true,
-        updatedAt: new Date()
-      })
-      .where(eq(armyCampaignProgress.id, progress.id))
-      .returning()
-
-    progressAfterBattle = completedProgress
-  } else if (campaignCompleted) {
-    const [advancedProgress] = await tx
-      .update(armyCampaignProgress)
-      .set({
-        campaignId: nextCampaign.id,
-        currentEnemySequence: 1,
-        turnsOnCurrentEnemy: resetTurnsOnCurrentEnemy(),
-        gameCompleted: false,
-        updatedAt: new Date()
-      })
-      .where(eq(armyCampaignProgress.id, progress.id))
-      .returning()
-
-    progressAfterBattle = advancedProgress
-  } else {
-    const [advancedProgress] = await tx
-      .update(armyCampaignProgress)
-      .set({
-        currentEnemySequence: progress.currentEnemySequence + 1,
-        turnsOnCurrentEnemy: resetTurnsOnCurrentEnemy(),
-        gameCompleted: false,
-        updatedAt: new Date()
-      })
-      .where(eq(armyCampaignProgress.id, progress.id))
-      .returning()
-
-    progressAfterBattle = advancedProgress
-  }
+  // Enemy three wraps the campaign; otherwise progression simply moves to the next enemy
+  const campaignCompleted = progress.currentEnemySequence >= ENEMIES_PER_CAMPAIGN
+  const nextFaction = campaignCompleted ? getRandomFactionKey() : progress.currentFaction
+  const nextCampaignNumber = campaignCompleted ? progress.campaignNumber + 1 : progress.campaignNumber
+  const nextEnemySequence = campaignCompleted ? 1 : progress.currentEnemySequence + 1
+  const [updatedProgress] = await tx.update(armyCampaignProgress).set({
+    campaignNumber: nextCampaignNumber,
+    campaignsCompleted: nextCampaignNumber - 1,
+    currentEnemySequence: nextEnemySequence,
+    currentFaction: nextFaction,
+    turnsOnCurrentEnemy: 0,
+    updatedAt: new Date()
+  }).where(eq(armyCampaignProgress.id, progress.id)).returning()
 
   await tx.insert(armyLogs).values({
-    armyId: army.id,
-    turnNumber: battleTurnNumber,
-    eventType: 'battle',
-    message: `Defeated ${enemy.enemyName}.`,
-    details: JSON.stringify(battleDetails)
+    armyId: army.id, turnNumber: battleTurnNumber, eventType: 'battle_victory',
+    message: `Defeated ${enemy.enemyName}.`, details: battleDetails
   })
 
   if (campaignCompleted) {
-    let campaignMessage = `${campaign.campaignName} completed.`
-
-    if (gameCompleted) {
-      campaignMessage = 'Final campaign completed. Leviathan is victorious.'
-    }
-
+    // A completed campaign rolls one new faction, then persists it for stable future reads
+    const nextEnemy = generateCurrentEnemy({ campaignNumber: nextCampaignNumber, enemySequence: 1, factionKey: nextFaction })
     await tx.insert(armyLogs).values({
-      armyId: army.id,
-      turnNumber: battleTurnNumber,
-      eventType: 'campaign',
-      message: campaignMessage,
-      details: JSON.stringify({
-        completedCampaign: campaign.campaignName,
-        majorRewardDucats: campaign.majorRewardDucats,
-        majorRewardManpower: campaign.majorRewardManpower,
-        majorRewardSupply: campaign.majorRewardSupply,
-        majorRewardMorale: campaign.majorRewardMorale
-      })
+      armyId: army.id, turnNumber: battleTurnNumber, eventType: 'campaign_completed',
+      message: `Campaign ${progress.campaignNumber} completed. New campaign ${nextCampaignNumber} begins against the ${nextEnemy.factionName}.`
+    })
+    await tx.insert(armyLogs).values({
+      armyId: army.id, turnNumber: battleTurnNumber, eventType: 'campaign_started',
+      message: `Campaign ${nextCampaignNumber} started against the ${nextEnemy.factionName}.`
+    })
+  } else {
+    await tx.insert(armyLogs).values({
+      armyId: army.id, turnNumber: battleTurnNumber, eventType: 'enemy_defeated',
+      message: `Enemy ${progress.currentEnemySequence} defeated. Enemy ${nextEnemySequence} approaches.`
     })
   }
 
   return {
-    progress: progressAfterBattle,
+    progress: updatedProgress,
     campaignCompleted,
-    gameCompleted,
-    resourceChanges
+    armyReset: false,
+    resources: resourceChanges
   }
 }
 
-// Applies the battle result in one transaction.
-export async function resolveBattle({
-  army,
-  campaign,
-  progress,
-  enemy,
-  resources,
-  battleCost,
-  battleDetails,
-  troopLosses,
-  outcome,
-  battleTurnNumber = progress.currentTurn
-}) {
-  // Victory advances linear progress. Defeat resets the army to campaign one.
-  return await db.transaction(async (tx) => {
-    return await applyBattleResultInTransaction(tx, {
-      army,
-      campaign,
-      progress,
-      enemy,
-      resources,
-      battleCost,
-      battleDetails,
-      troopLosses,
-      outcome,
-      battleTurnNumber
-    })
-  })
+export async function applyBattleResultInTransaction(tx, args) {
+  // Both manual battles and auto-attacks share this outcome switch
+  if (args.outcome === 'defeat') return applyDefeat(tx, args)
+  if (args.outcome === 'victory') return applyVictory(tx, args)
+  throw new Error(`Unsupported battle outcome: ${args.outcome}`)
 }
 
-// Applies battle writes inside an existing transaction.
-export async function applyBattleResultInTransaction(tx, {
-  army,
-  campaign,
-  progress,
-  enemy,
-  resources,
-  battleCost,
-  battleDetails,
-  troopLosses,
-  outcome,
-  battleTurnNumber = progress.currentTurn
-}) {
-  if (outcome === 'defeat') {
-    const progressAfterReset = await resetArmyToFirstCampaign(
-      tx,
-      army,
-      enemy,
-      battleDetails,
-      battleTurnNumber
-    )
-
-    return {
-      progress: progressAfterReset,
-      campaignCompleted: false,
-      gameCompleted: false,
-      armyReset: true
-    }
-  }
-
-  const victoryResult = await applyVictoryProgress(
-    tx,
-    army,
-    campaign,
-    progress,
-    enemy,
-    resources,
-    battleCost,
-    battleDetails,
-    troopLosses,
-    battleTurnNumber
-  )
-
-  return {
-    ...victoryResult,
-    armyReset: false
-  }
+export async function resolveBattle(args) {
+  // Manual battles start their own transaction; turn auto-attacks pass an existing one above
+  return db.transaction((tx) => applyBattleResultInTransaction(tx, args))
 }

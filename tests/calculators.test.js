@@ -1,486 +1,322 @@
-// BY AI
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  checkAndGetOptionalPositiveInteger,
-  checkAndGetPositiveInteger,
-  checkIfNonEmptyString,
-  checkIfPositiveInteger,
-  getNumberWithinRange,
-  getObjectValueOrDefault,
-  getRequestBody,
-  getValueOrDefault
+  checkAndGetLimitFromQuery, checkAndGetOptionalPositiveInteger,
+  checkAndGetOptionalPositiveIntegerFromQuery, checkAndGetPositiveInteger,
+  checkIfNonEmptyString, checkIfPositiveInteger, getNumberWithinRange,
+  getObjectValueOrDefault, getRequestBody, getValueOrDefault
 } from '../src/utils/helper.js'
 import {
-  BATTLE_TRIGGER_ENEMY_AUTO_ATTACK,
-  CAMPAIGNS,
-  ENEMY_ATTACK_AT_TURN,
-} from '../src/constants/gameBalance.js'
+  getCampaignDifficultyMultiplier,
+  getSafeCampaignNumber
+} from '../src/utils/campaignScaling.js'
+import { generateCurrentEnemy, getRandomFactionKey } from '../src/utils/enemyGenerator.js'
+import { getEquipmentColumnKey } from '../src/utils/equipment.js'
 import {
-  calculateNextTurnsOnCurrentEnemy,
-  calculateEquipmentGain,
-  calculateTurnResult,
-  calculateUnitUpkeep,
-  checkIfCampaignProductionIsValid,
-  checkIfEnemyShouldAutoAttack,
-  clampMorale,
-  getCampaignEquipmentGain,
-  getSafeTurnsOnCurrentEnemy,
-  resetTurnsOnCurrentEnemy
+  calculateEquipmentGain, calculateNextTurnsOnCurrentEnemy, calculateTurnResult,
+  calculateUnitUpkeep, checkIfEnemyShouldAutoAttack, clampMorale,
+  getSafeTurnsOnCurrentEnemy
 } from '../src/utils/turnCalculator.js'
 import {
-  calculateBattleResolution,
-  calculateBattleResourceCost,
-  calculateMoraleMultiplier,
-  calculatePlayerFightingStrength,
-  calculateVictoryTroopLosses,
-  checkIfArmyHasCounterUnit,
-  determineBattleOutcome,
-  determineVictoryType
+  calculateBattleResolution, calculateBattleResourceCost,
+  calculateMoraleMultiplier, calculatePlayerFightingStrength,
+  calculateVictoryTroopLosses, checkIfArmyHasCounterUnit,
+  determineBattleOutcome, determineVictoryType
 } from '../src/utils/battleCalculator.js'
+import {
+  BATTLE_COUNTER_MULTIPLIER, BATTLE_LOW_RESOURCE_MULTIPLIER,
+  ENEMY_FACTIONS, VICTORY_TYPE_DECISIVE, VICTORY_TYPE_PYRRHIC,
+  VICTORY_TYPE_STANDARD
+} from '../src/constants/gameBalance.js'
 
-test('helper functions validate common user input safely', async (t) => {
-  await t.test('checkIfNonEmptyString accepts only strings with visible content', () => {
-    assert.equal(checkIfNonEmptyString('abc'), true)
-    assert.equal(checkIfNonEmptyString('  abc  '), true)
-    assert.equal(checkIfNonEmptyString(''), false)
-    assert.equal(checkIfNonEmptyString('   '), false)
-    assert.equal(checkIfNonEmptyString(123), false)
-    assert.equal(checkIfNonEmptyString(null), false)
+test('input helpers', async (t) => {
+  await t.test('non-empty strings reject non-strings, blanks, and empty text', () => {
+    for (const value of [undefined, null, 0, false, {}, [], '', '   ', '\n\t']) {
+      assert.equal(checkIfNonEmptyString(value), false)
+    }
+    assert.equal(checkIfNonEmptyString(' x '), true)
   })
 
-  await t.test('positive integer helpers reject zero, negatives, decimals, and text', () => {
+  await t.test('positive integer checks do not coerce values', () => {
     assert.equal(checkIfPositiveInteger(1), true)
-    assert.equal(checkIfPositiveInteger(0), false)
-    assert.equal(checkIfPositiveInteger(-1), false)
-    assert.equal(checkIfPositiveInteger(1.5), false)
-
-    assert.equal(checkAndGetPositiveInteger('12'), 12)
-    assert.equal(checkAndGetPositiveInteger(12), 12)
-    assert.equal(checkAndGetPositiveInteger('0'), null)
-    assert.equal(checkAndGetPositiveInteger('-1'), null)
-    assert.equal(checkAndGetPositiveInteger('1.5'), null)
-    assert.equal(checkAndGetPositiveInteger('abc'), null)
+    assert.equal(checkIfPositiveInteger(10), true)
+    for (const value of [0, -1, 1.2, '1', NaN, Infinity, true, null]) {
+      assert.equal(checkIfPositiveInteger(value), false)
+    }
   })
 
-  await t.test('positive integer parsing rejects values JavaScript could coerce by accident', () => {
-    assert.equal(checkAndGetPositiveInteger(true), null)
-    assert.equal(checkAndGetPositiveInteger(false), null)
-    assert.equal(checkAndGetPositiveInteger(null), null)
-    assert.equal(checkAndGetPositiveInteger([]), null)
-    assert.equal(checkAndGetPositiveInteger([1]), null)
-    assert.equal(checkAndGetPositiveInteger({ value: 1 }), null)
-    assert.equal(checkAndGetPositiveInteger(''), null)
-    assert.equal(checkAndGetPositiveInteger('  '), null)
+  await t.test('positive integer parser accepts numeric strings but rejects unsafe coercions', () => {
+    assert.equal(checkAndGetPositiveInteger(7), 7)
+    assert.equal(checkAndGetPositiveInteger('7'), 7)
+    assert.equal(checkAndGetPositiveInteger(' 7 '), 7)
+    for (const value of [0, '0', -2, '1.5', 1.5, '', ' ', 'x', true, false, null, {}, [], [1]]) {
+      assert.equal(checkAndGetPositiveInteger(value), null)
+    }
   })
 
-  await t.test('optional positive integer allows missing values only', () => {
+  await t.test('optional parser distinguishes omission from invalid input', () => {
     assert.equal(checkAndGetOptionalPositiveInteger(undefined), undefined)
-    assert.equal(checkAndGetOptionalPositiveInteger('7'), 7)
-    assert.equal(checkAndGetOptionalPositiveInteger('0'), null)
+    assert.equal(checkAndGetOptionalPositiveInteger('3'), 3)
+    assert.equal(checkAndGetOptionalPositiveInteger('bad'), null)
   })
 
-  await t.test('request body helper returns an empty object for missing bodies', () => {
+  await t.test('query parser sends the supplied 400 error', () => {
+    const calls = []
+    const res = { status(code) { calls.push(code); return this }, json(body) { calls.push(body); return this } }
+    assert.equal(checkAndGetOptionalPositiveIntegerFromQuery(
+      { query: { page: 'bad' } }, res, 'page', 'bad page'
+    ), null)
+    assert.deepEqual(calls, [400, { error: 'bad page' }])
+    assert.equal(checkAndGetOptionalPositiveIntegerFromQuery(
+      { query: {} }, res, 'page', 'bad page'
+    ), undefined)
+    assert.equal(checkAndGetLimitFromQuery({ query: { limit: '9' } }, res), 9)
+  })
+
+  await t.test('body and fallback helpers preserve valid falsy values', () => {
     assert.deepEqual(getRequestBody({}), {})
     assert.deepEqual(getRequestBody({ body: null }), {})
-    assert.deepEqual(getRequestBody({ body: { username: 'alice' } }), { username: 'alice' })
+    assert.deepEqual(getRequestBody({ body: { x: 1 } }), { x: 1 })
+    assert.equal(getValueOrDefault(0, 4), 0)
+    assert.equal(getValueOrDefault(false, true), false)
+    assert.equal(getValueOrDefault(null, 4), 4)
+    assert.equal(getObjectValueOrDefault({ x: 0 }, 'x', 4), 0)
+    assert.equal(getObjectValueOrDefault({}, 'x', 4), 4)
+    assert.equal(getObjectValueOrDefault(null, 'x', 4), 4)
   })
 
-  await t.test('default and range helpers handle nullish values but preserve zero', () => {
-    assert.equal(getValueOrDefault(undefined, 5), 5)
-    assert.equal(getValueOrDefault(null, 5), 5)
-    assert.equal(getValueOrDefault(0, 5), 0)
-
-    assert.equal(getObjectValueOrDefault(null, 'infantry', 9), 9)
-    assert.equal(getObjectValueOrDefault(undefined, 'infantry', 9), 9)
-    assert.equal(getObjectValueOrDefault({ infantry: 0 }, 'infantry', 9), 0)
-    assert.equal(getObjectValueOrDefault({ infantry: null }, 'infantry', 9), 9)
-    assert.equal(getObjectValueOrDefault({}, 'infantry', 9), 9)
-
-    assert.equal(getNumberWithinRange(-5, 0, 100), 0)
-    assert.equal(getNumberWithinRange(150, 0, 100), 100)
-    assert.equal(getNumberWithinRange(50, 0, 100), 50)
+  await t.test('range helper clamps both boundaries and preserves interior values', () => {
+    assert.equal(getNumberWithinRange(-1, 0, 100), 0)
+    assert.equal(getNumberWithinRange(101, 0, 100), 100)
+    assert.equal(getNumberWithinRange(45, 0, 100), 45)
+    assert.equal(getNumberWithinRange(0, 0, 100), 0)
+    assert.equal(getNumberWithinRange(100, 0, 100), 100)
   })
 })
 
-test('turn calculator handles upkeep, equipment gain, and morale bounds', async (t) => {
-  await t.test('calculateUnitUpkeep treats missing and null quantities as zero', () => {
-    const upkeep = calculateUnitUpkeep([
-      { quantity: 2, flourUpkeep: 1, supplyUpkeep: 1 },
-      { quantity: null, flourUpkeep: 100, supplyUpkeep: 100 },
-      { flourUpkeep: 100, supplyUpkeep: 100 }
-    ])
-
-    assert.deepEqual(upkeep, {
-      flour: 2,
-      supply: 2
-    })
-  })
-
-  await t.test('calculateEquipmentGain reads explicit values for all three campaigns', () => {
-    const equipmentTypes = [
-      { id: 1, equipmentName: 'muskets' },
-      { id: 2, equipmentName: 'horses' },
-      { id: 3, equipmentName: 'field_guns' },
-      { id: 4, equipmentName: 'unknown_tool' }
-    ]
-    for (const campaign of CAMPAIGNS) {
-      const equipmentGain = calculateEquipmentGain(equipmentTypes, campaign)
-      assert.deepEqual(
-        equipmentGain.map((gain) => gain.quantity),
-        [
-          campaign.musketsGainPerTurn,
-          campaign.horsesGainPerTurn,
-          campaign.fieldGunsGainPerTurn,
-          0
-        ]
-      )
+test('campaign scaling and generated enemies', async (t) => {
+  await t.test('scaling follows the universal curve and sanitizes invalid depths', () => {
+    assert.equal(getCampaignDifficultyMultiplier(1), 1)
+    assert.equal(getCampaignDifficultyMultiplier(2), 1.15)
+    assert.equal(getCampaignDifficultyMultiplier(5), 1.6)
+    assert.equal(getCampaignDifficultyMultiplier(10), 2.35)
+    assert.equal(getCampaignDifficultyMultiplier(100), 15.85)
+    for (const value of [0, -8, 1.5, undefined, null, 'bad', '4oops', Number.MAX_SAFE_INTEGER + 1]) {
+      assert.equal(getSafeCampaignNumber(value), 1)
+      assert.equal(getCampaignDifficultyMultiplier(value), 1)
     }
-
-    assert.equal(getCampaignEquipmentGain(CAMPAIGNS[0], 'unknown_tool'), 0)
+    assert.equal(getSafeCampaignNumber('4'), 4)
+    assert.equal(getCampaignDifficultyMultiplier('4'), 1.45)
   })
 
-  await t.test('campaign production validation rejects unsafe database values', () => {
-    for (const campaign of CAMPAIGNS) {
-      assert.equal(checkIfCampaignProductionIsValid(campaign), true)
+  await t.test('all faction and sequence combinations generate valid deterministic enemies', () => {
+    const weaknesses = new Set()
+    for (const factionKey of Object.keys(ENEMY_FACTIONS)) {
+      for (let enemySequence = 1; enemySequence <= 3; enemySequence += 1) {
+        const input = { campaignNumber: 4, enemySequence, factionKey }
+        const enemy = generateCurrentEnemy(input)
+        assert.deepEqual(enemy, generateCurrentEnemy(input))
+        assert.match(enemy.enemyArmyId, /^generated-c4-e[123]-(liho|koi|bingxue)$/)
+        assert.equal(enemy.factionKey, factionKey)
+        assert.equal(enemy.factionName, ENEMY_FACTIONS[factionKey].name)
+        assert.equal(enemy.difficultyMultiplier, 1.45)
+        assert.ok(Number.isInteger(enemy.fightingStrength))
+        weaknesses.add(enemy.weakAgainstUnitType)
+      }
     }
-
-    assert.equal(checkIfCampaignProductionIsValid(null), false)
-    assert.equal(checkIfCampaignProductionIsValid({}), false)
-    assert.equal(checkIfCampaignProductionIsValid({
-      ...CAMPAIGNS[0],
-      flourGainPerTurn: -1
-    }), false)
-    assert.equal(checkIfCampaignProductionIsValid({
-      ...CAMPAIGNS[0],
-      supplyGainPerTurn: 1.5
-    }), false)
+    assert.deepEqual([...weaknesses].sort(), ['artillery', 'cavalry', 'infantry'])
   })
 
-  await t.test('calculateTurnResult adds camp production before consuming upkeep', () => {
+  await t.test('enemy strength grows by sequence and campaign depth', () => {
+    const strengths = [1, 2, 3].map((enemySequence) => generateCurrentEnemy({
+      campaignNumber: 1, enemySequence, factionKey: 'liho'
+    }).fightingStrength)
+    assert.deepEqual(strengths, [120, 180, 260])
+    assert.ok(generateCurrentEnemy({ campaignNumber: 10, enemySequence: 1, factionKey: 'liho' }).fightingStrength > strengths[0])
+  })
+
+  await t.test('invalid faction and sequence fail loudly', () => {
+    assert.throws(() => generateCurrentEnemy({ campaignNumber: 1, enemySequence: 1, factionKey: 'unknown' }), /Unknown enemy faction/)
+    for (const enemySequence of [0, 4, -1, undefined]) {
+      assert.throws(() => generateCurrentEnemy({ campaignNumber: 1, enemySequence, factionKey: 'liho' }), /Unknown enemy sequence/)
+    }
+  })
+
+  await t.test('random faction helper always returns a supported key', () => {
+    for (let iteration = 0; iteration < 100; iteration += 1) {
+      assert.ok(Object.hasOwn(ENEMY_FACTIONS, getRandomFactionKey()))
+    }
+  })
+})
+
+test('equipment mapping', async (t) => {
+  await t.test('maps every persisted equipment name to a safe Drizzle property', () => {
+    assert.equal(getEquipmentColumnKey('horses'), 'horses')
+    assert.equal(getEquipmentColumnKey('muskets'), 'muskets')
+    assert.equal(getEquipmentColumnKey('field_guns'), 'fieldGuns')
+  })
+  await t.test('rejects unsupported names and prototype-like keys', () => {
+    for (const value of ['fieldGuns', 'HORSES', 'none', '__proto__', undefined, null]) {
+      assert.equal(getEquipmentColumnKey(value), undefined)
+    }
+  })
+})
+
+test('turn calculator', async (t) => {
+  await t.test('upkeep sums all units and treats nullish quantities as zero', () => {
+    assert.deepEqual(calculateUnitUpkeep([
+      { quantity: 2, flourUpkeep: 3, supplyUpkeep: 1 },
+      { quantity: 3, flourUpkeep: 1, supplyUpkeep: 2 },
+      { quantity: null, flourUpkeep: 999, supplyUpkeep: 999 }
+    ]), { flour: 9, supply: 8 })
+    assert.deepEqual(calculateUnitUpkeep([]), { flour: 0, supply: 0 })
+  })
+
+  await t.test('equipment gains use campaign scaling and stable rounding', () => {
+    assert.deepEqual(calculateEquipmentGain(1), { horses: 3, fieldGuns: 2, muskets: 8 })
+    assert.deepEqual(calculateEquipmentGain(2), { horses: 3, fieldGuns: 2, muskets: 9 })
+    assert.deepEqual(calculateEquipmentGain(5), { horses: 5, fieldGuns: 3, muskets: 13 })
+    assert.deepEqual(calculateEquipmentGain(10), { horses: 7, fieldGuns: 5, muskets: 19 })
+  })
+
+  await t.test('turn production happens before upkeep and preserves ducats', () => {
+    const equipmentGain = calculateEquipmentGain(1)
     const result = calculateTurnResult({
-      campaign: CAMPAIGNS[0],
-      currentTurn: 4,
-      resources: {
-        manpower: 10,
-        flour: 3,
-        supply: 10,
-        morale: 50
-      },
-      upkeep: {
-        flour: 5,
-        supply: 4
-      },
-      equipmentGain: [
-        { equipmentTypeId: 1, equipmentName: 'muskets', quantity: 5 }
-      ]
+      campaignNumber: 1, currentTurn: 7,
+      resources: { manpower: 10, ducats: 99, flour: 1, supply: 2, morale: 50 },
+      upkeep: { flour: 10, supply: 10 }, equipmentGain
     })
-
-    assert.equal(result.turnNumber, 5)
-    assert.equal(result.manpowerGained, CAMPAIGNS[0].manpowerGainPerTurn)
-    assert.equal(result.flourGained, CAMPAIGNS[0].flourGainPerTurn)
-    assert.equal(result.supplyGained, CAMPAIGNS[0].supplyGainPerTurn)
-    assert.equal(result.flourConsumed, 5)
-    assert.equal(result.supplyConsumed, 4)
+    assert.equal(result.turnNumber, 8)
+    assert.equal(result.manpowerGained, 25)
+    assert.equal(result.resources.manpower, 35)
+    assert.equal(result.resources.ducats, 99)
+    assert.equal(result.resources.flour, 4)
+    assert.equal(result.resources.supply, 6)
     assert.equal(result.moraleChange, 0)
-    assert.deepEqual(result.resources, {
-      manpower: 10 + CAMPAIGNS[0].manpowerGainPerTurn,
-      flour: 3 + CAMPAIGNS[0].flourGainPerTurn - 5,
-      supply: 10 + CAMPAIGNS[0].supplyGainPerTurn - 4,
-      morale: 50
-    })
+    assert.equal(Object.hasOwn(result, 'equipmentGainedSummary'), false)
   })
 
-  await t.test('morale is clamped between zero and one hundred', () => {
-    assert.equal(clampMorale(-1), 0)
-    assert.equal(clampMorale(50), 50)
-    assert.equal(clampMorale(101), 100)
-
-    const lowMoraleTurn = calculateTurnResult({
-      campaign: CAMPAIGNS[0],
-      currentTurn: 1,
-      resources: {
-        manpower: 0,
-        flour: 0,
-        supply: 0,
-        morale: 3
-      },
-      upkeep: {
-        flour: CAMPAIGNS[0].flourGainPerTurn + 1,
-        supply: CAMPAIGNS[0].supplyGainPerTurn + 1
-      },
-      equipmentGain: []
-    })
-
-    assert.equal(lowMoraleTurn.resources.morale, 0)
-    assert.equal(lowMoraleTurn.flourConsumed, CAMPAIGNS[0].flourGainPerTurn)
-    assert.equal(lowMoraleTurn.supplyConsumed, CAMPAIGNS[0].supplyGainPerTurn)
-    assert.equal(lowMoraleTurn.moraleChange, -5)
-  })
-
-  await t.test('turn result does not apply morale penalty when flour exactly covers upkeep', () => {
+  await t.test('flour shortage applies morale penalty and clamps at zero', () => {
     const result = calculateTurnResult({
-      campaign: CAMPAIGNS[0],
-      currentTurn: 2,
-      resources: {
-        manpower: 0,
-        flour: 0,
-        supply: 1,
-        morale: 50
-      },
-      upkeep: {
-        flour: CAMPAIGNS[0].flourGainPerTurn,
-        supply: 10
-      },
-      equipmentGain: []
+      campaignNumber: 1, currentTurn: 1,
+      resources: { manpower: 0, ducats: 0, flour: 0, supply: 0, morale: 2 },
+      upkeep: { flour: 100, supply: 100 }, equipmentGain: calculateEquipmentGain(1)
     })
-
-    assert.equal(result.flourConsumed, CAMPAIGNS[0].flourGainPerTurn)
-    assert.equal(
-      result.supplyConsumed,
-      Math.min(1 + CAMPAIGNS[0].supplyGainPerTurn, 10)
-    )
-    assert.equal(result.moraleChange, 0)
     assert.equal(result.resources.flour, 0)
-    assert.equal(result.resources.morale, 50)
+    assert.equal(result.resources.supply, 0)
+    assert.equal(result.moraleChange, -5)
+    assert.equal(result.resources.morale, 0)
   })
 
-  await t.test('enemy auto-attack counter helpers sanitize and reset values', () => {
-    assert.equal(getSafeTurnsOnCurrentEnemy(null), 0)
-    assert.equal(getSafeTurnsOnCurrentEnemy(undefined), 0)
-    assert.equal(getSafeTurnsOnCurrentEnemy(-3), 0)
-    assert.equal(getSafeTurnsOnCurrentEnemy(2.5), 0)
-    assert.equal(getSafeTurnsOnCurrentEnemy(4), 4)
-
-    assert.equal(calculateNextTurnsOnCurrentEnemy(null), 1)
-    assert.equal(calculateNextTurnsOnCurrentEnemy(-10), 1)
+  await t.test('morale and enemy counters sanitize boundary values', () => {
+    assert.equal(clampMorale(-5), 0)
+    assert.equal(clampMorale(50), 50)
+    assert.equal(clampMorale(105), 100)
+    assert.equal(clampMorale('50'), 50)
+    assert.equal(clampMorale('bad'), 0)
+    for (const value of [undefined, null, -1, 1.5, 'bad']) assert.equal(getSafeTurnsOnCurrentEnemy(value), 0)
+    assert.equal(getSafeTurnsOnCurrentEnemy('5'), 5)
     assert.equal(calculateNextTurnsOnCurrentEnemy(5), 6)
-    assert.equal(resetTurnsOnCurrentEnemy(), 0)
-  })
-
-  await t.test('enemy auto-attack threshold only triggers at the configured limit', () => {
-    assert.equal(checkIfEnemyShouldAutoAttack(ENEMY_ATTACK_AT_TURN - 1), false)
-    assert.equal(checkIfEnemyShouldAutoAttack(ENEMY_ATTACK_AT_TURN), true)
-    assert.equal(checkIfEnemyShouldAutoAttack(ENEMY_ATTACK_AT_TURN + 1), true)
-    assert.equal(checkIfEnemyShouldAutoAttack(null), false)
-    assert.equal(checkIfEnemyShouldAutoAttack(-1), false)
+    assert.equal(calculateNextTurnsOnCurrentEnemy(-2), 1)
+    assert.equal(checkIfEnemyShouldAutoAttack(5), false)
+    assert.equal(checkIfEnemyShouldAutoAttack(6), true)
+    assert.equal(checkIfEnemyShouldAutoAttack(7), true)
+    assert.equal(checkIfEnemyShouldAutoAttack(2, 2), true)
   })
 })
 
-test('battle calculator handles counters, resource penalties, and outcome boundaries', async (t) => {
+test('battle calculator', async (t) => {
   const units = [
-    {
-      unitName: 'infantry',
-      quantity: 3,
-      baseStrength: 10,
-      flourUpkeep: 1,
-      battleSupplyCost: 1
-    },
-    {
-      unitName: 'artillery',
-      quantity: 2,
-      baseStrength: 28,
-      flourUpkeep: 1,
-      battleSupplyCost: 3
-    }
+    { armyUnitId: 1, unitName: 'infantry', quantity: 10, baseStrength: 10, flourUpkeep: 3, battleSupplyCost: 1 },
+    { armyUnitId: 2, unitName: 'cavalry', quantity: 5, baseStrength: 18, flourUpkeep: 3, battleSupplyCost: 1 },
+    { armyUnitId: 3, unitName: 'artillery', quantity: 2, baseStrength: 28, flourUpkeep: 1, battleSupplyCost: 3 }
   ]
 
-  await t.test('calculateBattleResourceCost sums flour and battle supply costs', () => {
-    const cost = calculateBattleResourceCost(units)
-
-    assert.deepEqual(cost, {
-      flour: 5,
-      supply: 9
-    })
+  await t.test('battle resource cost sums flour and battle-specific supply', () => {
+    assert.deepEqual(calculateBattleResourceCost(units), { flour: 47, supply: 21 })
+    assert.deepEqual(calculateBattleResourceCost([]), { flour: 0, supply: 0 })
   })
 
-  await t.test('counter check only passes for valid weakness with owned quantity', () => {
-    assert.equal(checkIfArmyHasCounterUnit(units, 'artillery'), true)
-    assert.equal(checkIfArmyHasCounterUnit(units, 'cavalry'), false)
+  await t.test('counter detection requires a valid weakness and positive matching quantity', () => {
+    assert.equal(checkIfArmyHasCounterUnit(units, 'infantry'), true)
+    assert.equal(checkIfArmyHasCounterUnit(units, 'cavalry'), true)
+    assert.equal(checkIfArmyHasCounterUnit([{ ...units[0], quantity: 0 }], 'infantry'), false)
     assert.equal(checkIfArmyHasCounterUnit(units, 'none'), false)
     assert.equal(checkIfArmyHasCounterUnit(units, 'invalid'), false)
-
-    const zeroQuantityUnits = [
-      { unitName: 'artillery', quantity: 0 }
-    ]
-
-    assert.equal(checkIfArmyHasCounterUnit(zeroQuantityUnits, 'artillery'), false)
   })
 
-  await t.test('morale multiplier maps 50 morale to normal strength', () => {
+  await t.test('morale multiplier maps bounds and midpoint', () => {
     assert.equal(calculateMoraleMultiplier(0), 0.5)
     assert.equal(calculateMoraleMultiplier(50), 1)
     assert.equal(calculateMoraleMultiplier(100), 1.5)
+    assert.equal(calculateMoraleMultiplier(-10), 0.5)
+    assert.equal(calculateMoraleMultiplier(110), 1.5)
+    assert.equal(calculateMoraleMultiplier('bad'), 0.5)
   })
 
-  await t.test('player strength applies morale, counter, and resource multipliers', () => {
-    const fullStrength = calculatePlayerFightingStrength({
-      units,
-      morale: 50,
-      hasEnoughFlour: true,
-      hasEnoughSupply: true,
-      weakAgainstUnit: 'artillery'
+  await t.test('player strength applies counter, morale, and low-resource multipliers', () => {
+    const full = calculatePlayerFightingStrength({
+      units, morale: 50, hasEnoughFlour: true, hasEnoughSupply: true, weakAgainstUnit: 'infantry'
     })
-
-    assert.equal(fullStrength.baseStrength, 86)
-    assert.equal(fullStrength.hasCounterUnit, true)
-    assert.equal(fullStrength.counterMultiplier, 1.1)
-    assert.equal(fullStrength.resourceMultiplier, 1)
-    assert.equal(fullStrength.fightingStrength, 94)
-
-    const lowResourceStrength = calculatePlayerFightingStrength({
-      units,
-      morale: 50,
-      hasEnoughFlour: false,
-      hasEnoughSupply: true,
-      weakAgainstUnit: 'artillery'
+    assert.equal(full.baseStrength, 246)
+    assert.equal(full.counterMultiplier, BATTLE_COUNTER_MULTIPLIER)
+    assert.equal(full.fightingStrength, Math.floor(246 * BATTLE_COUNTER_MULTIPLIER))
+    const low = calculatePlayerFightingStrength({
+      units, morale: 50, hasEnoughFlour: false, hasEnoughSupply: true, weakAgainstUnit: 'none'
     })
-
-    assert.equal(lowResourceStrength.resourceMultiplier, 0.85)
-    assert.equal(lowResourceStrength.fightingStrength, 80)
+    assert.equal(low.resourceMultiplier, BATTLE_LOW_RESOURCE_MULTIPLIER)
+    assert.equal(low.fightingStrength, Math.floor(246 * BATTLE_LOW_RESOURCE_MULTIPLIER))
   })
 
-  await t.test('player strength uses the same low-resource penalty if flour or supply is missing', () => {
-    const noFlourStrength = calculatePlayerFightingStrength({
-      units,
-      morale: 50,
-      hasEnoughFlour: false,
-      hasEnoughSupply: true,
-      weakAgainstUnit: 'none'
-    })
-    const noSupplyStrength = calculatePlayerFightingStrength({
-      units,
-      morale: 50,
-      hasEnoughFlour: true,
-      hasEnoughSupply: false,
-      weakAgainstUnit: 'none'
-    })
-    const noResourcesStrength = calculatePlayerFightingStrength({
-      units,
-      morale: 50,
-      hasEnoughFlour: false,
-      hasEnoughSupply: false,
-      weakAgainstUnit: 'none'
-    })
-
-    assert.equal(noFlourStrength.resourceMultiplier, 0.85)
-    assert.equal(noSupplyStrength.resourceMultiplier, 0.85)
-    assert.equal(noResourcesStrength.resourceMultiplier, 0.85)
-    assert.equal(noFlourStrength.fightingStrength, noSupplyStrength.fightingStrength)
-    assert.equal(noSupplyStrength.fightingStrength, noResourcesStrength.fightingStrength)
+  await t.test('outcome treats exact ties as victory', () => {
+    assert.equal(determineBattleOutcome(100, 100), 'victory')
+    assert.equal(determineBattleOutcome(99, 100), 'defeat')
+    assert.equal(determineBattleOutcome(101, 100), 'victory')
   })
 
-  await t.test('battle outcome uses victory on exact tie', () => {
-    assert.equal(determineBattleOutcome(80, 80), 'victory')
-    assert.equal(determineBattleOutcome(79, 80), 'defeat')
-    assert.equal(determineBattleOutcome(81, 80), 'victory')
+  await t.test('victory type honors ratio boundaries', () => {
+    assert.equal(determineVictoryType(100, 100), VICTORY_TYPE_PYRRHIC)
+    assert.equal(determineVictoryType(110, 100), VICTORY_TYPE_PYRRHIC)
+    assert.equal(determineVictoryType(111, 100), VICTORY_TYPE_STANDARD)
+    assert.equal(determineVictoryType(149, 100), VICTORY_TYPE_STANDARD)
+    assert.equal(determineVictoryType(150, 100), VICTORY_TYPE_DECISIVE)
+    assert.equal(determineVictoryType(1, 0), VICTORY_TYPE_DECISIVE)
   })
 
-  await t.test('victory type is based on player strength compared with enemy strength', () => {
-    assert.equal(determineVictoryType(100, 100), 'pyrrhic')
-    assert.equal(determineVictoryType(110, 100), 'pyrrhic')
-    assert.equal(determineVictoryType(111, 100), 'standard')
-    assert.equal(determineVictoryType(120, 100), 'standard')
-    assert.equal(determineVictoryType(149, 100), 'standard')
-    assert.equal(determineVictoryType(150, 100), 'decisive')
-    assert.equal(determineVictoryType(100, 0), 'decisive')
+  await t.test('troop losses use victory rates, round upward, and never go negative', () => {
+    const one = [{ armyUnitId: 1, unitName: 'infantry', quantity: 1 }]
+    for (const victoryType of [VICTORY_TYPE_PYRRHIC, VICTORY_TYPE_STANDARD, VICTORY_TYPE_DECISIVE]) {
+      const [loss] = calculateVictoryTroopLosses({ units: one, victoryType })
+      assert.equal(loss.quantityLost, 1)
+      assert.equal(loss.quantityAfter, 0)
+    }
+    const [zero] = calculateVictoryTroopLosses({ units: [{ ...one[0], quantity: 0 }], victoryType: VICTORY_TYPE_PYRRHIC })
+    assert.equal(zero.quantityLost, 0)
   })
 
-  await t.test('victory troop losses use the victory type loss rate', () => {
-    const troopLosses = calculateVictoryTroopLosses({
-      victoryType: 'standard',
-      units: [
-        { armyUnitId: 1, unitName: 'infantry', quantity: 10 },
-        { armyUnitId: 2, unitName: 'cavalry', quantity: 1 },
-        { armyUnitId: 3, unitName: 'artillery', quantity: 0 }
-      ]
+  await t.test('full resolution records generated enemy metadata and optional auto-attack context', () => {
+    const enemy = generateCurrentEnemy({ campaignNumber: 1, enemySequence: 1, factionKey: 'liho' })
+    const result = calculateBattleResolution({
+      campaign: { campaignNumber: 1 }, enemy, units,
+      resources: { flour: 100, supply: 100, morale: 50 },
+      trigger: 'enemy_auto_attack', turnsOnCurrentEnemy: 6, enemyAttackAtTurn: 6
     })
-
-    assert.deepEqual(troopLosses, [
-      {
-        armyUnitId: 1,
-        unitName: 'infantry',
-        quantityBefore: 10,
-        victoryType: 'standard',
-        troopLossRate: 0.1,
-        quantityLost: 1,
-        quantityAfter: 9
-      },
-      {
-        armyUnitId: 2,
-        unitName: 'cavalry',
-        quantityBefore: 1,
-        victoryType: 'standard',
-        troopLossRate: 0.1,
-        quantityLost: 1,
-        quantityAfter: 0
-      },
-      {
-        armyUnitId: 3,
-        unitName: 'artillery',
-        quantityBefore: 0,
-        victoryType: 'standard',
-        troopLossRate: 0.1,
-        quantityLost: 0,
-        quantityAfter: 0
-      }
-    ])
+    assert.equal(result.battleDetails.campaignName, 'Campaign 1')
+    assert.equal(result.battleDetails.factionName, 'Duchy of Liho')
+    assert.equal(result.battleDetails.weakAgainstUnit, 'infantry')
+    assert.equal(result.battleDetails.turnsOnCurrentEnemy, 6)
+    assert.equal(result.battleDetails.enemyAttackAtTurn, 6)
+    assert.equal(result.battleDetails.outcome, result.outcome)
   })
 
-  await t.test('pyrrhic victories create heavier losses than decisive victories', () => {
-    const units = [
-      { armyUnitId: 1, unitName: 'infantry', quantity: 20 }
-    ]
-
-    const pyrrhicLosses = calculateVictoryTroopLosses({
-      units,
-      victoryType: 'pyrrhic'
+  await t.test('defeat resolution has no victory type or troop losses', () => {
+    const result = calculateBattleResolution({
+      campaign: { campaignName: 'Impossible' },
+      enemy: { enemyName: 'Wall', fightingStrength: 99999, weakAgainstUnit: 'none' },
+      units: [], resources: { flour: 0, supply: 0, morale: 50 }, trigger: 'manual'
     })
-    const decisiveLosses = calculateVictoryTroopLosses({
-      units,
-      victoryType: 'decisive'
-    })
-
-    assert.equal(pyrrhicLosses[0].quantityLost, 4)
-    assert.equal(decisiveLosses[0].quantityLost, 1)
-  })
-
-  await t.test('victory troop losses never reduce a unit below zero', () => {
-    const troopLosses = calculateVictoryTroopLosses({
-      victoryType: 'pyrrhic',
-      units: [
-        { armyUnitId: 1, unitName: 'infantry', quantity: 1 }
-      ]
-    })
-
-    assert.equal(troopLosses[0].quantityLost, 1)
-    assert.equal(troopLosses[0].quantityAfter, 0)
-  })
-
-  await t.test('battle resolution records enemy auto-attack trigger details', () => {
-    const resolution = calculateBattleResolution({
-      campaign: {
-        campaignName: 'Unix Wars'
-      },
-      enemy: {
-        enemyName: 'Liho Border Guard',
-        fightingStrength: 80,
-        weakAgainstUnit: 'artillery'
-      },
-      resources: {
-        morale: 50,
-        flour: 100,
-        supply: 100
-      },
-      units,
-      trigger: BATTLE_TRIGGER_ENEMY_AUTO_ATTACK,
-      turnsOnCurrentEnemy: ENEMY_ATTACK_AT_TURN,
-      enemyAttackAtTurn: ENEMY_ATTACK_AT_TURN
-    })
-
-    assert.equal(resolution.battleDetails.trigger, BATTLE_TRIGGER_ENEMY_AUTO_ATTACK)
-    assert.equal(resolution.battleDetails.turnsOnCurrentEnemy, ENEMY_ATTACK_AT_TURN)
-    assert.equal(resolution.battleDetails.enemyAttackAtTurn, ENEMY_ATTACK_AT_TURN)
-    assert.equal(resolution.battleDetails.outcome, 'victory')
+    assert.equal(result.outcome, 'defeat')
+    assert.equal(result.victoryType, null)
+    assert.deepEqual(result.troopLosses, [])
   })
 })

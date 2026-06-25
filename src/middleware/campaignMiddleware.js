@@ -1,7 +1,7 @@
 import { checkAndGetPositiveInteger } from '../utils/helper.js'
 import * as campaignModel from '../models/campaignModel.js'
 
-// Validates the campaignId URL parameter once for campaign catalog routes.
+// Validates campaignId once for the read-only catalogue routes
 export function checkCampaignId(req, res, next) {
   const campaignId = checkAndGetPositiveInteger(req.params.campaignId)
 
@@ -13,10 +13,10 @@ export function checkCampaignId(req, res, next) {
   next()
 }
 
-// Loads the campaign row so later route functions do not repeat the lookup.
+// Loads the catalogue row early so later middleware does not repeat the same query
 export async function loadCampaign(req, res, next) {
   try {
-    const campaign = await campaignModel.findCampaignById(res.locals.campaignId)
+    const campaign = await campaignModel.findCampaignTemplateById(res.locals.campaignId)
 
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found.' })
@@ -25,7 +25,6 @@ export async function loadCampaign(req, res, next) {
     res.locals.campaign = campaign
     next()
   } catch (error) {
-    console.error('loadCampaign middleware error:', error)
-    res.status(500).json({ error: 'Internal Server Error.' })
+    next(error)
   }
 }
