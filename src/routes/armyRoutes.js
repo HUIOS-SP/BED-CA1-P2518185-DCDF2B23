@@ -10,7 +10,7 @@ import * as userMiddleware from '../middleware/userMiddleware.js'
 
 const router = Router()
 
-// Every army endpoint needs the same user -> army lookup chain, keeping it DRY but readable
+// Every army endpoint needs the same user -> army lookup chain, keeping it DRY but readable (kinda)
 const loadArmy = [
   userMiddleware.checkUserId,
   userMiddleware.loadUser,
