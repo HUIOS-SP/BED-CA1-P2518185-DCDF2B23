@@ -34,6 +34,13 @@ route -> middleware -> controller -> model -> Drizzle / SQLite
 
 ## Setup
 
+Clone the repository and enter the project folder:
+
+```bash
+git clone https://github.com/HUIOS-SP/BED-CA1-P2518185-DCDF2B23.git Leviathan
+cd Leviathan
+```
+
 Create a `.env` file:
 
 ```env
@@ -77,7 +84,7 @@ The default URL is:
 http://localhost:3000
 ```
 
-If an old local database conflicts with the schema, delete `leviathan.db` and run `npm run db` again
+If an old local database conflicts with the schema, delete `leviathan.db` and run `npm run db` again.
 
 ## Seed Data and Starter State
 
@@ -224,6 +231,12 @@ An exact strength tie is a victory.
 
 ## API Overview
 
+### Health
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/` | Check that the API server is running |
+
 ### Users
 
 | Method | Route | Purpose |
@@ -276,13 +289,13 @@ Errors use:
 }
 ```
 
-`DELETE /users/:userId` returns `204 No Content`
+`DELETE /users/:userId` returns `204 No Content`.
 
 Gameplay mutations return focused action results. They do not repeat the full army state. Use `GET /users/:userId/army/state` when a complete snapshot is required.
 
 ## Example Responses
 
-The examples below assume the randomly selected faction is `liho`
+The examples below assume the randomly selected faction is `liho`.
 
 ### Create User
 
@@ -568,10 +581,10 @@ The suite currently contains 130 passing tests covering:
 |-- index.js
 |-- drizzle.config.js
 |-- package.json
-|-- dbml
-|   `-- leviathan.dbml
 |-- docs
 |   |-- API_ENDPOINTS.md
+|   |-- TEST_RUN.md
+|   |-- database.dbml
 |   |-- MECHANICS.md
 |   `-- TABLES_ABOUT.md
 |-- tests
@@ -625,10 +638,11 @@ The suite currently contains 130 passing tests covering:
 
 - [API endpoint reference](docs/API_ENDPOINTS.md)
 - [Gameplay mechanics](docs/MECHANICS.md)
+- [Interview test run](docs/TEST_RUN.md)
 - [Database table reference](docs/TABLES_ABOUT.md)
-- [DBML relationship diagram](dbml/leviathan.dbml)
+- [Database relationship diagram (DBML)](docs/database.dbml)
 
-## CA1 Design Boundaries
+## CA1 Design Boundaries and Assumptions
 
 - one user owns exactly one army
 - authentication and frontend work are excluded
